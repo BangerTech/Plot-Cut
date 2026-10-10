@@ -59,7 +59,14 @@ In the panel, open **Setup**:
 
 Default for the first test: **file**. Inspect the output, then switch to Loki / TCP / COM.
 
-The Loki API the server must expose is documented in [`LOKI-KI-AUFTRAG.md`](LOKI-KI-AUFTRAG.md). Loki does **not** generate plotter commands — it only writes what Plot Cut sends. Illustrator + FineCut over Loki must keep working unchanged.
+The Loki API Plot Cut expects is specified in [`LOKI-KI-AUFTRAG.md`](LOKI-KI-AUFTRAG.md) (against Loki-PrintServer **1.4.16**). Loki does **not** generate plotter commands.
+
+Until that API exists on the Pi:
+
+- **Vevor** (CH340): use transport `tcp` and the socat port from the Loki dashboard (`7580+`, also in `GET /api/devices/{bus_id}/forward` → `serial.port`).
+- **Mimaki CG-60SR** (VID `0x0A50`, raw USB, no tty): needs the new `/api/plotcut` job path through Loki’s existing USB bridge. Do not treat it as a COM port. If FineCut has the cutter via USB/IP, detach it in the Loki client first.
+
+Illustrator + FineCut over Loki must keep working unchanged.
 
 ## Development
 

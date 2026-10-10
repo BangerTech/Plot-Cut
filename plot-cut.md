@@ -128,18 +128,38 @@ Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
   profile werden nur bei der Migration ergaenzt. Vom Benutzer geloeschte Profile bleiben
   geloescht. Fehlende Schluessel werden mit Standardwerten aufgefuellt.
 
-## Loki-PrintServer-API (Transport `loki`)
+## Loki-PrintServer (1.4.16)
 
-Plot Cut erzeugt die fertigen Plotterbytes selbst. Loki schreibt sie nur unveraendert an das
-Geraet. Der Auftrag fuer die Loki-Seite steht in `LOKI-KI-AUFTRAG.md`.
+Loki (https://github.com/BangerTech/Loki-PrintServer) teilt USB-Plotter vom Raspberry Pi.
+Plot Cut erzeugt die Befehle selbst; Loki schreibt nur Bytes. Der genaue Server-Auftrag
+steht in `LOKI-KI-AUFTRAG.md` — an die echte Loki-Architektur angelehnt, nicht an eine
+erfundene tty-Welt.
+
+| Port | Zweck |
+|---|---|
+| 7575 | USB/IP (FineCut unter Windows, `attach-mode=usbip`) |
+| 7576 | FastAPI + Dashboard. Plot Cut: `/api/plotcut/*` (noch zu bauen) |
+| 7580+ | socat Serial-over-TCP (Vevor CH340 `1a86:7523`) |
+| 631 | CUPS / IPP |
+
+| Plotter | USB | Loki-Weg | Plot-Cut-Profil |
+|---|---|---|---|
+| Mimaki CG-60SR | VID `0x0A50`, Vendor-USB, kein tty | `usb_bridge.py` Raw-USB (Bulk); nicht `usbserial` | `loki` + device `mimaki-cg60sr`, Sprache `mgl2` |
+| Vevor | `1a86:7523` CH340 | `forward_info.serial.port` (socat) | `loki` + device `vevor`, Sprache `hpgl` |
+
+FineCut und Plot Cut koennen **nicht gleichzeitig** denselben Mimaki halten: USB/IP-Attach
+→ Loki liefert `409` / `available: false`. Im Loki-Client vorher trennen.
+
+Solange `/api/plotcut` auf dem Pi fehlt, bleibt Transport **file** oder **tcp** auf den
+sichtbaren socat-Port des Vevor (Dashboard / `GET /api/devices/{bus_id}/forward`).
+
+Geplante HTTP-API (Client: `transport.LokiTransport`, Test: `tests/test_loki_transport.py`):
 
 - `GET  http://<pi>:7576/api/plotcut/devices`
-  liefert `{"devices":[{"id","name","kind","available":bool,"attached_to":str|null}]}`.
+  → `{"devices":[{"id","name","kind","available","attached_to"}]}`
 - `POST http://<pi>:7576/api/plotcut/devices/{id}/job`, Body = Rohbytes
-  (`application/octet-stream`), liefert `{"ok":true,"bytes":N}`.
-- Fehler: `{"detail":"..."}`. 404 = unbekanntes Geraet / API fehlt, 409 = belegt (z. B. per
-  USB/IP an einen PC angehaengt), 503 = nicht angeschlossen.
-- Client: `transport.LokiTransport`. Test: `tests/test_loki_transport.py` (Fake-Server).
+  (`application/octet-stream`) → `{"ok":true,"bytes":N}`
+- Fehler `{"detail":"..."}`: 404 API/Geraet fehlt, 409 belegt, 503 nicht geshared.
 
 ## Steuerkanal-Protokoll (VectorCraft)
 
