@@ -1,0 +1,9 @@
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["plot_cut"]
