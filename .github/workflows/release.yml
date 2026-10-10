@@ -17,13 +17,13 @@ jobs:
         include:
           - os: windows-latest
             label: Windows
-            archive: Plot-Cut-windows.zip
+            asset: Plot-Cut.exe
           - os: macos-latest
             label: macOS
-            archive: Plot-Cut-macos.zip
+            asset: Plot-Cut.dmg
           - os: ubuntu-latest
             label: Linux
-            archive: Plot-Cut-linux.zip
+            asset: Plot-Cut-linux
     steps:
       - uses: actions/checkout@v4
 
@@ -45,39 +45,21 @@ jobs:
       - name: Build
         run: python -m PyInstaller --noconfirm --clean "Plot Cut.spec"
 
-      - name: Pack archive
+      - name: Package
         shell: bash
         run: |
-          python - <<'PY'
-          import platform
-          import stat
-          import zipfile
-          from pathlib import Path
-
-          system = platform.system()
-          archive = "${{ matrix.archive }}"
-          if system == "Windows":
-              sources = [Path("dist/Plot Cut.exe")]
-          elif system == "Darwin":
-              app = Path("dist/Plot Cut.app")
-              sources = [p for p in app.rglob("*") if p.is_file()]
-          else:
-              sources = [Path("dist/Plot Cut")]
-          missing = [p for p in sources if not p.exists()]
-          if not sources or missing:
-              raise SystemExit(f"build output missing: {missing or sources}")
-          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-              for path in sources:
-                  info = zipfile.ZipInfo(path.relative_to("dist").as_posix())
-                  mode = path.stat().st_mode
-                  if system != "Windows":
-                      mode |= stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                  info.external_attr = mode << 16
-                  zf.writestr(info, path.read_bytes())
-          print(archive)
-          PY
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "dist/Plot Cut.exe" "Plot-Cut.exe"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            hdiutil create -volname "Plot Cut" -srcfolder "dist/Plot Cut.app" -ov -format UDZO "Plot-Cut.dmg"
+          else
+            cp "dist/Plot Cut" "Plot-Cut-linux"
+            chmod +x "Plot-Cut-linux"
+          fi
+          test -f "${{ matrix.asset }}"
 
       - name: Attach to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ matrix.archive }}" --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "${{ matrix.asset }}" --clobber

@@ -307,7 +307,8 @@ Ergebnis: `dist\Plot Cut.exe` (~45 MB, enthaelt Python + PySide6). Einstieg ist 
 Danach Desktop- und Startmenue-Verknuepfung "Plot Cut.lnk" auf diese Datei anlegen.
 Das Spec-File ist `Plot Cut.spec` (Icon nur unter Windows, unter macOS zusaetzlich ein
 `.app`-Bundle). Ein veroeffentlichtes GitHub-Release startet `.github/workflows/release.yml`
-und haengt `Plot-Cut-windows.zip`, `Plot-Cut-macos.zip` und `Plot-Cut-linux.zip` an.
+und haengt die gebauten Programme an: `Plot-Cut.exe`, `Plot-Cut.dmg` (das `.app` darin)
+und `Plot-Cut-linux`.
 
 ## Phase 2 (spaeter)
 
