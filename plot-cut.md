@@ -51,14 +51,48 @@ Die GUI (PySide6) sitzt obenauf:
 
 ## Vorschau
 
-- Helle Folie (Rolle ab y = 0 nach oben, Breite aus dem Profil), adaptives mm-Raster,
-  gruener Nullpunkt, Mass "B x H mm" unter dem Objekt.
-- Plot: Objekt mit transparenter Originalfarbe und schwarzer Schnittkontur.
-- Plot Out (FineCut-Konvention): schwarz = gegen Uhrzeigersinn, rot = im Uhrzeigersinn,
-  gelb gestrichelt = Leerfahrt, blaue Reihenfolge-Nummern, Pfeile, gruener Kopf in der
-  Simulation.
-- Mausrad = Zoom um den Cursor, Ziehen = verschieben, Doppelklick / "Einpassen" =
-  auf Objekt einpassen, "Ganze Folie" = ganze Folienbreite.
+- FineCut/Mimaki (`mgl2`): Ursprung **rechts unten**. Maschinen-X waechst von
+  dort nach links in die Folie, Y nach oben. Die Form bleibt seitenrichtig
+  (rechte Kante des Motivs am Ursprung). Links neben der Folienbreite ist grau.
+  Kein Karopapier, Millimeter-Lineal unten, 0 an der Ursprungsmarke.
+- HP-GL/Vevor: Ursprung links unten, X nach rechts.
+- FineCuts "Rahmen" ist eine Extra-Verschiebung und wird nicht nachgebaut.
+  Ohne Rahmen liegt die Ecke direkt auf (0, 0).
+- Plot-Dialog: Tabs **Vorschau** (gefuellt) und **Schneidelinie** (nur Kontur).
+  Rechte Leiste wie FineCut:
+  - Runde Knoepfe: Initialisieren (alles zuruecksetzen), Blattgröße einlesen
+    (aus dem Profil, noch keine Geraeteabfrage), Schneiden... (-> Ausplotten), Beenden.
+  - Tabelle mit ↔/↕: Blattgröße, Offset, Größe, Skalierung(%) (gekoppelt "—",
+    ausser bei Verzerren), Kopieren X/Y als Raster, Kopierabstand X/Y,
+    Rahmen (Haken + Abstand X/Y, wird mitgeschnitten). Darunter Gesamtmass;
+    rot, wenn breiter als die Folie.
+  - Tabs Layout / Kacheln Abstand / Passermarken. Layout: Drehen (90°),
+    Bewegen (9 Positionen auf der Folie), Anpassen (proportional auf die Folie
+    skalieren), Original Layout; Spiegeln, Verzerren, Nullpunkt fest. Kacheln,
+    Passermarken und Justiermarken sind sichtbar, aber noch ohne Funktion.
+  - Tabs Farbe / Ebene: Farbliste mit Haken, abgehakte Farben werden nicht geschnitten.
+  Reihenfolge der Platzierung: drehen/spiegeln, skalieren, an Ursprung, Rahmen,
+  Kopienraster, dann Bewegen-Position + Offset (nicht bei Nullpunkt fest).
+- Ausplotten (frueher "Plot Out") wie FineCut: Plot-Einstellung mit
+  Plotter-Einstellung (keine Bedingungsbefehle), Auswahl-Einstellung (Preset aus
+  `favorites`) oder Benutzerdefiniert (Werkzeug CT1-3, Geschwindigkeit/Andruck/Offset
+  einzeln abwaehlbar = Wert am Plotter lassen). Bedingung je Farbe (Preset oder
+  "Nicht schneiden", gespeichert in `conditions_by_color`). Optionen: Sortieren
+  (Alle / Jede Farbe, Innen vor Aussen), Overcut, Kopf in Parkposition (Abstand
+  hinter dem Motiv). Rechts: Schneiden, Abbrechen, Vorschau... (eigenes Fenster mit
+  Richtung, Reihenfolge, Leerfahrten, Simulation), Speichern als Datei..., Save Preset Setting.
+- Sortierung: Leerfahrt-Optimierung nur innerhalb einer Verschachtelungstiefe,
+  sonst kam der Rahmen vor den Innenteilen. Alle Transformationen behalten `kind`.
+- Plot-Dialoge erzwingen dunkle Schrift (`#111`), damit Windows-Dunkelmodus
+  keine weissen Buttons ohne Text erzeugt.
+- Erstes Einpassen wartet, bis das Fenster eine echte Groesse hat (sonst blieb die
+  Vorschau schwarz, Massstab 0).
+- Plot Out: schwarz = gegen Uhrzeigersinn, rot = im Uhrzeigersinn, gelb = Leerfahrt.
+- Mausrad = Zoom, Ziehen = verschieben, Doppelklick = ganze Folie / einpassen.
+- Das Panel wird waehrend Plot/Plot Out versteckt, damit es die Dialoge nicht ueberdeckt.
+- Hinweise (Info, Warnung, Fehler) bleiben vor dem immer-oben-Panel und brechen den Text um (`ui/popup.py`).
+- Dropdowns (Kopienrichtung, Profile) oeffnen sich ebenfalls vor dem Fenster, mit dunkler Schrift auf weiss.
+- Die Kacheln im Panel zentrieren Icon und Beschriftung.
 
 ## Einstellungen (keine Datenbank)
 
@@ -85,12 +119,13 @@ Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
         "sheet_width_mm": 610.0
       },
       "transport": {
-        "kind": "loki",             // "loki" | "tcp" | "serial" | "file"
+        "kind": "mimaki_usb",       // "mimaki_usb" | "loki" | "tcp" | "serial" | "file"
+        "usb_path": "",             // nur mimaki_usb, leer = automatisch
         "host": "192.168.1.50",     // Raspberry Pi mit Loki
         "loki_port": 7576,          // Loki-HTTP-API
         "device": "mimaki-cg60sr",  // Loki-Geraete-id
         "port": 7580,               // nur kind=tcp (socat)
-        "serial_port": "COM3",      // nur kind=serial
+        "serial_port": "COM3",      // nur kind=serial; "auto" = CH340 (Vevor) suchen
         "baud": 9600,
         "file_path": "out.plt"      // nur kind=file
       },
@@ -101,19 +136,35 @@ Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
         "overcut_mm": 0.0,
         "sort": true,
         "inner_first": true,
-        "send_conditions": true     // SP/VS/FS/!PT mitsenden
+        "send_conditions": true,    // SP/VS/FS/!PT mitsenden (aus condition_source abgeleitet)
+        "condition_source": "custom", // "plotter" | "preset" | "custom" (Ausplotten)
+        "preset": "",               // Name aus favorites bei "preset"
+        "tool": 1,                  // CT1-3 -> SPn
+        "use_speed": true,          // false = VS nicht senden
+        "use_pressure": true,       // false = FS nicht senden
+        "use_offset": true,         // false = !PT nicht senden
+        "sort_mode": "all",         // "all" | "color"
+        "park": true,               // Kopf nach dem Schnitt hinter das Motiv
+        "park_mm": 20.0
       },
       "conditions_by_color": {
-        // "#RRGGBB": { "tool": 1, "speed": 30, "pressure": 100, "offset": 0.3, "enabled": true }
+        // "#rrggbb": { "preset": "Name", "tool": 1, "speed": 30, "pressure": 100, "offset": 0.3, "enabled": true }
+        // "#rrggbb": { "enabled": false }   // Nicht schneiden
       }
     },
     "Vevor": { "...": "gleiche Struktur, language hpgl, 720 mm, 20 cm/s, 80 g, 0.25 mm" }
   },
   "favorites": {
-    // "Name": { ...wie defaults... }
+    // "Name": { "tool": 1, "speed": 30, "pressure": 100, "offset": 0.3 }  (= Presets)
   },
   "per_file": {
-    // "C:/pfad/zeichnung.vectorcraft": { "copies": 1, "rotate": 0, "mirror": false, ... }
+    // "C:/pfad/zeichnung.vectorcraft": {
+    //   "rotate_index": 0, "mirror": false, "distort": false, "fixed_origin": false,
+    //   "copies_x": 1, "copies_y": 1, "gap_x": 10, "gap_y": 10,
+    //   "offset_x": 0, "offset_y": 0, "anchor": [0, 0],   // Bewegen: Anteil X/Y der Folie
+    //   "frame_on": false, "frame_x": 10, "frame_y": 10, "disabled_colors": []
+    // }
+    // Alte Schluessel copies/copy_axis/copy_gap/frame_mm werden beim Oeffnen uebernommen.
   },
   "ui": { "panel_geometry": "..." }
 }
@@ -138,7 +189,7 @@ erfundene tty-Welt.
 | Port | Zweck |
 |---|---|
 | 7575 | USB/IP (FineCut unter Windows, `attach-mode=usbip`) |
-| 7576 | FastAPI + Dashboard. Plot Cut: `/api/plotcut/*` (noch zu bauen) |
+| 7576 | FastAPI + Dashboard. Plot Cut: `/api/plotcut/*` (Loki 1.5.0) |
 | 7580+ | socat Serial-over-TCP (Vevor CH340 `1a86:7523`) |
 | 631 | CUPS / IPP |
 
@@ -147,13 +198,29 @@ erfundene tty-Welt.
 | Mimaki CG-60SR | VID `0x0A50`, Vendor-USB, kein tty | `usb_bridge.py` Raw-USB (Bulk); nicht `usbserial` | `loki` + device `mimaki-cg60sr`, Sprache `mgl2` |
 | Vevor | `1a86:7523` CH340 | `forward_info.serial.port` (socat) | `loki` + device `vevor`, Sprache `hpgl` |
 
-FineCut und Plot Cut koennen **nicht gleichzeitig** denselben Mimaki halten: USB/IP-Attach
-→ Loki liefert `409` / `available: false`. Im Loki-Client vorher trennen.
+### Mimaki wie FineCut: lokal per USB/IP (empfohlen unter Windows)
 
-Solange `/api/plotcut` auf dem Pi fehlt, bleibt Transport **file** oder **tcp** auf den
-sichtbaren socat-Port des Vevor (Dashboard / `GET /api/devices/{bus_id}/forward`).
+So plottet FineCut: Der Loki-Client haengt den Cutter per USB/IP an den PC
+(`usbip port` zeigt `0a50:0001 -> usbip://<pi>:3240/1-1.3.1`). Windows bindet den
+Mimaki-Treiber `mkusb` (Klasse `UsbPlotter`, Schnittstelle
+`{fe05b407-0142-458b-ab3d-f7180561e884}`), FineCut schreibt MGL-IIc direkt dorthin.
 
-Geplante HTTP-API (Client: `transport.LokiTransport`, Test: `tests/test_loki_transport.py`):
+Plot Cut macht dasselbe mit Transport `mimaki_usb` (`transport.MimakiUsbTransport`):
+Geraetepfad aus `HKLM\SYSTEM\CurrentControlSet\Control\DeviceClasses\{fe05b407-...}`,
+`CreateFileW` + `WriteFile` in 4-KB-Bloecken. Feld `usb_path` im Profil leer = automatisch.
+Illustrator/FineCut muessen dafuer nicht beendet werden; nur nicht gleichzeitig senden.
+
+Vevor genauso: Der Loki-Client haengt den CH340 (`1a86:7523`, usbip `1-1.3.3`) an den
+PC, Windows zeigt einen COM-Port (z. B. COM5). Profil `serial`, `serial_port: "auto"`
+sucht den CH340 selbst, weil sich die COM-Nummer beim Anhaengen aendern kann.
+
+Der Weg `loki` (`/api/plotcut/.../job`) geht ueber Lokis USB-Bridge und scheitert im
+USB/IP-Modus mit 503 "USB 0a50:0001 nicht gefunden", weil usbip das Geraet haelt.
+
+Die API ist ab Loki 1.5.0 da. Transport im Profil auf `loki` stellen, Host = Pi,
+`device` = `id` aus `GET /api/plotcut/devices`.
+
+HTTP-API (Client: `transport.LokiTransport`, Test: `tests/test_loki_transport.py`):
 
 - `GET  http://<pi>:7576/api/plotcut/devices`
   → `{"devices":[{"id","name","kind","available","attached_to"}]}`
@@ -205,7 +272,7 @@ Zum Entwickeln: `run.bat` (startet aus dem venv mit Python 3.12) und `start-vect
 ## Entwicklung
 
 - Python **3.12** im `.venv` (PySide6 6.12 unterstuetzt 3.14 noch nicht).
-- Tests: `.venv\Scripts\python.exe -m pytest -q`
+- App-Icon: `assets/logo.png` (Fenster, Tray, Panel) und `assets/logo.ico` (EXE).
 
 ## Eigenstaendiges Programm bauen (PyInstaller)
 

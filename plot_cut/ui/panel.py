@@ -7,17 +7,18 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFont, QMouseEvent
 from PySide6.QtWidgets import (
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import icons
+from .style import ComboBox
 
 if TYPE_CHECKING:
     from ..app import AppController
@@ -40,7 +41,7 @@ class Panel(QWidget):
         self.setStyleSheet(_STYLE)
 
         self._build_ui()
-        self.resize(250, 245)
+        self.setFixedWidth(292)
 
     # -- Aufbau ------------------------------------------------------------
 
@@ -62,7 +63,7 @@ class Panel(QWidget):
         label = QLabel("Plotter")
         label.setObjectName("Status")
         lay.addWidget(label)
-        self.profile_combo = QComboBox()
+        self.profile_combo = ComboBox()
         self.profile_combo.setToolTip("Aktiven Plotter waehlen")
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
         lay.addWidget(self.profile_combo, 1)
@@ -87,7 +88,7 @@ class Panel(QWidget):
         lay.setContentsMargins(8, 6, 8, 6)
 
         logo = QLabel()
-        logo.setPixmap(icons.icon_wordmark().pixmap(26, 26))
+        logo.setPixmap(icons.app_icon().pixmap(32, 32))
         lay.addWidget(logo)
 
         title = QLabel("Plot Cut")
@@ -135,16 +136,7 @@ class Panel(QWidget):
 
         cols = 3
         for i, (label, icon, tip, handler, enabled) in enumerate(buttons):
-            btn = QToolButton()
-            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            btn.setText(label)
-            btn.setIcon(icon)
-            btn.setToolTip(tip)
-            btn.setEnabled(enabled)
-            btn.setFixedSize(70, 54)
-            if handler is not None:
-                btn.clicked.connect(handler)
-            grid.addWidget(btn, i // cols, i % cols)
+            grid.addWidget(_tile(label, icon, tip, handler, enabled), i // cols, i % cols)
 
         return body
 
@@ -178,6 +170,34 @@ class Panel(QWidget):
         self.controller.save_panel_geometry()
 
 
+def _tile(label: str, icon, tip: str, handler, enabled: bool) -> QPushButton:
+    """Kachel mit Icon und Text, beide in der Mitte der Box."""
+    btn = QPushButton()
+    btn.setObjectName("Tile")
+    btn.setFixedSize(86, 68)
+    btn.setToolTip(tip)
+    btn.setEnabled(enabled)
+    btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+    lay = QVBoxLayout(btn)
+    lay.setContentsMargins(4, 6, 4, 6)
+    lay.setSpacing(2)
+    lay.addStretch(1)
+    pic = QLabel()
+    pic.setPixmap(icon.pixmap(22, 22))
+    pic.setAlignment(Qt.AlignCenter)
+    pic.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+    text = QLabel(label)
+    text.setObjectName("TileText")
+    text.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+    text.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+    lay.addWidget(pic)
+    lay.addWidget(text)
+    lay.addStretch(1)
+    if handler is not None:
+        btn.clicked.connect(handler)
+    return btn
+
+
 _STYLE = """
 #PlotPanel { background: #3a3a3a; border: 1px solid #222; }
 #Header { background: #2b2b2b; }
@@ -185,6 +205,17 @@ _STYLE = """
 #StatusBar { background: #2b2b2b; }
 QLabel#Title { color: #f0f0f0; }
 QLabel#Status { color: #b8b8b8; font-size: 11px; }
+QPushButton#Tile {
+    color: #e8e8e8; background: #454545; border: 1px solid #2d2d2d;
+    border-radius: 4px;
+}
+QPushButton#Tile:hover:enabled { background: #525252; }
+QPushButton#Tile:pressed:enabled { background: #5d5d5d; }
+QPushButton#Tile:disabled { color: #888; background: #3f3f3f; }
+QPushButton#Tile QLabel#TileText {
+    color: #e8e8e8; background: transparent; font-size: 11px;
+}
+QPushButton#Tile:disabled QLabel#TileText { color: #888; }
 QToolButton {
     color: #e8e8e8; background: #454545; border: 1px solid #2d2d2d;
     border-radius: 4px; font-size: 10px;
@@ -197,5 +228,4 @@ QComboBox {
     color: #e8e8e8; background: #454545; border: 1px solid #2d2d2d;
     border-radius: 4px; padding: 2px 6px;
 }
-QComboBox QAbstractItemView { color: #e8e8e8; background: #454545; }
 """

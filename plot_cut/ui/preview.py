@@ -23,12 +23,15 @@ from ..geometry import Polyline
 MIN_SCALE = 0.05  # px pro mm
 MAX_SCALE = 200.0
 
-# Helle Folie mit dunklen Schnittlinien, wie in FineCut.
-OFF_SHEET = "#3a3a3a"
-SHEET = "#f5f5f2"
-GRID_LIGHT = "#e6e6e2"
-GRID_STRONG = "#d2d2cc"
-SHEET_EDGE = "#8a8a84"
+# FineCut-Plot: links vom Ursprung grau (Maschine), rechts weisse Folie.
+OFF_SHEET = "#a3a3a3"
+SHEET = "#ffffff"
+RULER_BG = "#f3f3f3"
+RULER_FG = "#666666"
+RULER_H = 28
+GRID_LIGHT = "#eeeeee"
+GRID_STRONG = "#dddddd"
+SHEET_EDGE = "#9a9a9a"
 CUT_CCW = "#111111"
 CUT_CW = "#d02828"
 TRAVEL = "#d49a00"
@@ -43,6 +46,10 @@ class PreviewWidget(QWidget):
         self.mode = mode
         self.polylines: list[Polyline] = []
         self.sheet_width_mm: float = 610.0
+        self.sheet_height_mm: float = 1000.0
+        self.cut_lines_only: bool = False
+        # Mimaki/FineCut: Ursprung rechts unten, +X laeuft nach links in die Folie.
+        self.origin_corner: str = "bottom_right"
 
         # Plot-Out-Optionen
         self.show_arrows = False
@@ -65,12 +72,25 @@ class PreviewWidget(QWidget):
 
     # -- Daten -------------------------------------------------------------
 
-    def set_data(self, polylines: list[Polyline], sheet_width_mm: float, refit: bool = True) -> None:
+    def set_data(
+        self,
+        polylines: list[Polyline],
+        sheet_width_mm: float,
+        refit: bool = True,
+        sheet_height_mm: float | None = None,
+    ) -> None:
         self.polylines = polylines
         self.sheet_width_mm = max(sheet_width_mm, 1.0)
+        if sheet_height_mm is not None:
+            self.sheet_height_mm = max(sheet_height_mm, 1.0)
         self._total_len = sum(pl.length() for pl in polylines)
         if refit:
             self._fit_pending = True
+        self.update()
+
+    def set_cut_lines(self, enabled: bool) -> None:
+        """Schneidelinie: nur die Kontur, ohne gefuellte Flaeche."""
+        self.cut_lines_only = enabled
         self.update()
 
     def set_options(self, *, arrows: bool, order: bool, travel: bool) -> None:
@@ -85,47 +105,89 @@ class PreviewWidget(QWidget):
 
     # -- Ansicht -----------------------------------------------------------
 
+    def fit_default(self) -> None:
+        """Plot: ganze Folie (wie FineCut). Plot Out: auf die Pfade."""
+        if self.mode == "plot":
+            self.fit_sheet()
+        else:
+            self.fit_content()
+
     def fit_content(self) -> None:
         """Passt die Ansicht auf die Pfade ein (plus Rand und Ursprung)."""
         minx, miny, maxx, maxy = _bounds(self.polylines)
         minx, miny = min(minx, 0.0), min(miny, 0.0)
-        pad = max(10.0, 0.15 * max(maxx - minx, maxy - miny))
+        pad = max(10.0, 0.15 * max(maxx - minx, maxy - miny, 1.0))
         self._fit_rect(minx - pad, miny - pad, maxx + pad, maxy + pad)
 
     def fit_sheet(self) -> None:
-        """Zeigt die ganze Folienbreite."""
-        _, _, _, maxy = _bounds(self.polylines)
-        height = max(maxy, self.sheet_width_mm * 0.4)
-        self._fit_rect(-10.0, -10.0, self.sheet_width_mm + 10.0, height + 10.0)
+        """Ganze Folienbreite. Ursprung unten, y=0 auf dem Lineal.
 
-    def _fit_rect(self, x0: float, y0: float, x1: float, y1: float) -> None:
-        w = max(x1 - x0, 1.0)
-        h = max(y1 - y0, 1.0)
-        self._scale = _clamp(min(self.width() / w, self.height() / h), MIN_SCALE, MAX_SCALE)
-        self._center = QPointF((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        Mimaki/FineCut (``bottom_right``): Ursprung am rechten Rand, Folie nach
+        links, links davon grau. Ohne Rahmen liegt das Objekt direkt am Ursprung.
+        """
+        if self.width() < 8 or self.height() < 8:
+            self._fit_pending = True
+            return
+        sheet = max(self.sheet_width_mm, 1.0)
+        if self.origin_corner == "bottom_right":
+            # View-X: 0 = Ursprung rechts, negativ = in die Folie.
+            x0, x1 = -sheet * 1.04, sheet * 0.012
+        else:
+            x0, x1 = -sheet * 0.012, sheet * 1.04
+        self._scale = _clamp(self.width() / max(x1 - x0, 1.0), MIN_SCALE, MAX_SCALE)
+        self._center = QPointF(
+            (x0 + x1) / 2.0,
+            (self.height() / 2.0 - RULER_H) / self._scale,
+        )
         self._fit_pending = False
         self.update()
 
-    def _to_px(self, x_mm: float, y_mm: float) -> QPointF:
-        return QPointF(
-            self.width() / 2.0 + (x_mm - self._center.x()) * self._scale,
-            self.height() / 2.0 - (y_mm - self._center.y()) * self._scale,
-        )
+    def _fit_rect(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        """``x``/``y`` sind Maschinen-Millimeter."""
+        if self.width() < 8 or self.height() < 8:
+            self._fit_pending = True
+            return
+        vx0, vx1 = self._view_x(x0), self._view_x(x1)
+        if vx0 > vx1:
+            vx0, vx1 = vx1, vx0
+        w = max(vx1 - vx0, 1.0)
+        h = max(y1 - y0, 1.0)
+        self._scale = _clamp(min(self.width() / w, self.height() / h), MIN_SCALE, MAX_SCALE)
+        self._center = QPointF((vx0 + vx1) / 2.0, (y0 + y1) / 2.0)
+        self._fit_pending = False
+        self.update()
 
-    def _to_mm(self, p: QPointF) -> QPointF:
+    def _view_x(self, x_mm: float) -> float:
+        """Maschinen-X nach View-X. Bei Mimaki waechst X nach links."""
+        return -x_mm if self.origin_corner == "bottom_right" else x_mm
+
+    def _machine_x(self, view_x: float) -> float:
+        return -view_x if self.origin_corner == "bottom_right" else view_x
+
+    def _to_view(self, p: QPointF) -> QPointF:
         return QPointF(
             self._center.x() + (p.x() - self.width() / 2.0) / self._scale,
             self._center.y() - (p.y() - self.height() / 2.0) / self._scale,
         )
 
+    def _to_px(self, x_mm: float, y_mm: float) -> QPointF:
+        return QPointF(
+            self.width() / 2.0 + (self._view_x(x_mm) - self._center.x()) * self._scale,
+            self.height() / 2.0 - (y_mm - self._center.y()) * self._scale,
+        )
+
+    def _to_mm(self, p: QPointF) -> QPointF:
+        view = self._to_view(p)
+        return QPointF(self._machine_x(view.x()), view.y())
+
     # -- Maus --------------------------------------------------------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         anchor = event.position()
-        before = self._to_mm(anchor)
+        before = self._to_view(anchor)
         factor = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
         self._scale = _clamp(self._scale * factor, MIN_SCALE, MAX_SCALE)
-        after = self._to_mm(anchor)
+        after = self._to_view(anchor)
         self._center += before - after
         self.update()
 
@@ -147,24 +209,25 @@ class PreviewWidget(QWidget):
         self.setCursor(Qt.OpenHandCursor)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: ARG002
-        self.fit_content()
+        self.fit_default()
 
-    def resizeEvent(self, event) -> None:  # noqa: ARG002
-        if self._fit_pending:
-            self.fit_content()
+    def resizeEvent(self, event) -> None:
+        old = event.oldSize()
+        if self._fit_pending or old.width() < 8 or old.height() < 8:
+            self.fit_default()
 
     # -- Zeichnen ----------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: ARG002
         if self._fit_pending:
-            self.fit_content()
+            self.fit_default()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), QColor(OFF_SHEET))
 
         self._paint_sheet(p)
         if not self.polylines:
-            p.setPen(QColor("#888"))
+            p.setPen(QColor("#666"))
             p.drawText(self.rect(), Qt.AlignCenter, "Keine Auswahl")
             p.end()
             return
@@ -173,34 +236,32 @@ class PreviewWidget(QWidget):
             self._paint_plot(p)
         else:
             self._paint_plot_out(p)
-        self._paint_dimensions(p)
-        self._paint_hint(p)
+            self._paint_dimensions(p)
+        self._paint_origin(p)
+        self._paint_ruler(p)
         p.end()
 
     def _paint_sheet(self, p: QPainter) -> None:
-        # Die Folie ist eine Rolle: Breite fest, Laenge (y) nach oben unbegrenzt.
-        top_mm = self._to_mm(QPointF(0, 0)).y() + 1.0
-        tl = self._to_px(0.0, max(top_mm, 1.0))
+        # FineCut: links vom Ursprung grau (Maschine), rechts/oben weisse Folie.
+        # Kein Karopapier im Plot-Modus.
+        top_mm = min(self._to_mm(QPointF(0, 0)).y() + 1.0, self.sheet_height_mm)
+        tl = self._to_px(0.0, max(top_mm, 0.0))
         br = self._to_px(self.sheet_width_mm, 0.0)
         sheet = QRectF(tl, br).normalized()
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(SHEET))
         p.drawRect(sheet)
 
-        self._paint_grid(p, sheet)
+        if self.mode != "plot":
+            self._paint_grid(p, sheet)
 
-        p.setPen(QPen(QColor(SHEET_EDGE), 1.0, Qt.DashLine))
-        p.drawLine(self._to_px(0, 0), self._to_px(0, top_mm))
-        p.drawLine(self._to_px(self.sheet_width_mm, 0), self._to_px(self.sheet_width_mm, top_mm))
+        p.setPen(QPen(QColor("#8e8e8e"), 1.0))
+        p.drawLine(self._to_px(0, 0), self._to_px(0, self.sheet_height_mm))
         p.drawLine(self._to_px(0, 0), self._to_px(self.sheet_width_mm, 0))
-
-        # Ursprung (Startpunkt des Messers)
-        origin = self._to_px(0, 0)
-        p.setPen(QPen(QColor(ORIGIN), 1.6))
-        p.drawLine(origin, origin + QPointF(14, 0))
-        p.drawLine(origin, origin + QPointF(0, -14))
-        p.setFont(_font(8))
-        p.drawText(origin + QPointF(4, 14), "0,0")
+        p.drawLine(
+            self._to_px(0, self.sheet_height_mm),
+            self._to_px(self.sheet_width_mm, self.sheet_height_mm),
+        )
 
     def _paint_grid(self, p: QPainter, sheet: QRectF) -> None:
         step = 10.0
@@ -208,8 +269,9 @@ class PreviewWidget(QWidget):
             step *= 5 if str(int(step))[0] == "1" else 2
         p.save()
         p.setClipRect(sheet)
-        x0 = self._to_mm(sheet.topLeft()).x()
-        x1 = self._to_mm(sheet.bottomRight()).x()
+        xa = self._to_mm(sheet.topLeft()).x()
+        xb = self._to_mm(sheet.bottomRight()).x()
+        x0, x1 = min(xa, xb), max(xa, xb)
         y1 = self._to_mm(sheet.topLeft()).y()
         y0 = self._to_mm(sheet.bottomRight()).y()
         light = QPen(QColor(GRID_LIGHT), 1)
@@ -227,18 +289,27 @@ class PreviewWidget(QWidget):
         p.restore()
 
     def _paint_plot(self, p: QPainter) -> None:
-        # Blasse Originalfarbe zeigt, was gezeichnet wurde; die schwarze Kontur ist der Schnitt.
+        # Wie FineCut: gefuelltes Objekt auf der weissen Folie.
         for pl in self.polylines:
-            if pl.closed and pl.color.startswith("#"):
-                fill = QColor(pl.color)
-                fill.setAlpha(45)
-                p.setPen(Qt.NoPen)
-                p.setBrush(fill)
+            color = QColor(pl.color if pl.color.startswith("#") else "#111111")
+            if self.cut_lines_only or pl.kind == "frame":
+                # Rahmen und Schneidelinie: nur die Linie, die der Plotter faehrt.
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(color, 1.4))
+                if pl.closed:
+                    p.drawPolygon(self._poly(pl))
+                else:
+                    p.drawPolyline(self._poly(pl))
+                continue
+            if pl.closed:
+                p.setPen(QPen(color, 1.0))
+                p.setBrush(color)
                 p.drawPolygon(self._poly(pl))
+            else:
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(color, 1.6))
+                p.drawPolyline(self._poly(pl))
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(CUT_CCW), 1.6))
-        for pl in self.polylines:
-            p.drawPolyline(self._poly(pl))
 
     def _paint_plot_out(self, p: QPainter) -> None:
         drawn = 0.0
@@ -297,11 +368,52 @@ class PreviewWidget(QWidget):
         tl = self._to_px(minx, maxy)
         br = self._to_px(maxx, miny)
         box = QRectF(tl, br).normalized()
-        p.setFont(_font(9))
+        p.setFont(_font(11))
         p.setPen(QColor(DIMENSION))
         label = f"{maxx - minx:.1f} x {maxy - miny:.1f} mm"
-        p.drawText(QRectF(box.right() - 200, box.bottom() + 4, 200, 16),
-                   Qt.AlignRight | Qt.AlignTop, label)
+        # Neben das Objekt, auf die Folie — nicht unters Lineal.
+        anchor = box.left() if self.origin_corner == "bottom_right" else box.right()
+        rect = QRectF(anchor - 150, box.top() - 18, 140, 16)
+        if self.origin_corner != "bottom_right":
+            rect = QRectF(anchor + 6, box.top() - 18, 140, 16)
+        p.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, label)
+
+    def _paint_origin(self, p: QPainter) -> None:
+        """Gruene Ursprungsmarke. Bei Mimaki sitzt sie rechts unten."""
+        o = self._to_px(0.0, 0.0)
+        p.setPen(QPen(QColor(ORIGIN), 2))
+        outward = 18 if self.origin_corner == "bottom_right" else -18
+        p.drawLine(o, o + QPointF(outward, 0))
+        p.drawLine(o, o + QPointF(0, -18))
+        p.setFont(_font(8))
+        p.drawText(o + QPointF(4 if outward > 0 else -16, 14), "0")
+
+    def _paint_ruler(self, p: QPainter) -> None:
+        """Millimeter-Lineal am unteren Rand, wie FineCut."""
+        y = self.height() - RULER_H
+        bar = QRectF(0, y, self.width(), RULER_H)
+        p.fillRect(bar, QColor(RULER_BG))
+        p.setPen(QPen(QColor("#c8c8c8"), 1))
+        p.drawLine(0, y, self.width(), y)
+
+        a = self._to_mm(QPointF(0, y)).x()
+        b = self._to_mm(QPointF(self.width(), y)).x()
+        lo, hi = min(a, b), max(a, b)
+        step = 10.0
+        while step * self._scale < 8:
+            step *= 5 if str(int(step))[0] == "1" else 2
+        p.setFont(_font(7))
+        p.setPen(QColor(RULER_FG))
+        k = math.floor(lo / step)
+        while k * step <= hi:
+            mm = k * step
+            x = self._to_px(mm, 0).x()
+            major = abs(k) % 5 == 0
+            tick = 12 if major else 6
+            p.drawLine(QPointF(x, y + 1), QPointF(x, y + tick))
+            if major:
+                p.drawText(QRectF(x - 18, y + 8, 36, 12), Qt.AlignHCenter | Qt.AlignTop, f"{mm:.0f}")
+            k += 1
 
     def _paint_hint(self, p: QPainter) -> None:
         p.setFont(_font(8))
@@ -310,7 +422,7 @@ class PreviewWidget(QWidget):
             QRectF(8, self.height() - 20, self.width() - 16, 16),
             Qt.AlignLeft | Qt.AlignVCenter,
             f"Folie {self.sheet_width_mm:.0f} mm  |  Mausrad: Zoom  |  Ziehen: verschieben  "
-            "|  Doppelklick: einpassen",
+            "|  Doppelklick: ganze Folie",
         )
 
     def _draw_arrow(self, p: QPainter, pts) -> None:
@@ -332,11 +444,17 @@ class PreviewWidget(QWidget):
 def view_buttons(preview: PreviewWidget) -> QHBoxLayout:
     """Knoepfe "Einpassen" und "Ganze Folie" fuer eine Vorschau."""
     row = QHBoxLayout()
+    btn_style = (
+        "QPushButton { color: #111111; background: #ffffff; "
+        "border: 1px solid #b0b0b0; padding: 6px 10px; }"
+    )
     fit = QPushButton("Einpassen")
+    fit.setStyleSheet(btn_style)
     fit.setToolTip("Auf das Objekt zoomen (auch Doppelklick in die Vorschau)")
     fit.clicked.connect(preview.fit_content)
     row.addWidget(fit)
     sheet = QPushButton("Ganze Folie")
+    sheet.setStyleSheet(btn_style)
     sheet.setToolTip("Gesamte Folienbreite anzeigen")
     sheet.clicked.connect(preview.fit_sheet)
     row.addWidget(sheet)
@@ -344,7 +462,7 @@ def view_buttons(preview: PreviewWidget) -> QHBoxLayout:
 
 
 def _font(size: int) -> QFont:
-    f = QFont()
+    f = QFont("Segoe UI")
     f.setPointSize(size)
     return f
 

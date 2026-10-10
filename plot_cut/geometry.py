@@ -3,8 +3,10 @@ transformieren, sortieren und fuer das Schneiden aufbereiten.
 
 Konventionen:
 - Alle Koordinaten in dieser Datei sind Millimeter.
-- Ursprung links unten (Plotter-Konvention), y nach oben. SVG liefert y nach
-  unten; beim Import wird gespiegelt, sobald die Hoehe bekannt ist.
+- y nach oben. SVG liefert y nach unten; beim Import wird gespiegelt.
+- ``bottom_left``: Ursprung links unten, X nach rechts (HP-GL / Vevor).
+- ``bottom_right``: Ursprung rechts unten, X in die Folie nach links
+  (Mimaki / FineCut). Die Form bleibt seitenrichtig.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ class Polyline:
     points: list[Point]
     closed: bool = False
     color: str = "#000000"
+    kind: str = "path"  # "path" oder "frame" (Rahmen, nur Kontur)
 
     def is_empty(self) -> bool:
         return len(self.points) < 2
@@ -232,16 +235,20 @@ def _px_polyline_to_mm(pl: Polyline, height_px: float, mm_per_px: float) -> Poly
     return Polyline(points=pts, closed=pl.closed, color=pl.color)
 
 
-def _has_unit(value: str | None) -> bool:
-    return bool(value) and value.strip()[-1:].isalpha()
+def _has_physical_unit(value: str | None) -> bool:
+    """True nur bei mm/cm/in/pt/pc. ``px`` und einheitenlos = VectorCraft-Punkte."""
+    if not value:
+        return False
+    v = value.strip().lower()
+    return any(v.endswith(u) for u in ("mm", "cm", "in", "pt", "pc"))
 
 
 def _svg_scale(text: str, unitless_mm: float = MM_PER_PT) -> tuple[float, float, float]:
     """Liefert (mm pro svgelements-px, Hoehe in svgelements-px, mm pro User-Unit).
 
-    svgelements rechnet die Wurzel-``width`` in px um (ohne Einheit = 1 px) und
-    skaliert den viewBox darauf. Eine Breite ohne Einheit ist bei VectorCraft
-    aber in Punkt gemeint (A4 = ``width="595.276"``), daher ``unitless_mm``.
+    VectorCraft schreibt A4 als ``width="595.276"`` oder ``width="595.276px"`` in
+    Punkt. ``px`` darf deshalb nicht als CSS-Pixel (96 dpi) gelesen werden, sonst
+    wird aus 30 mm ein 22,5-mm-Schnitt.
     """
     try:
         root = ET.fromstring(text)
@@ -254,7 +261,7 @@ def _svg_scale(text: str, unitless_mm: float = MM_PER_PT) -> tuple[float, float,
     vb_w = float(vb[2]) if len(vb) == 4 else 0.0
     vb_h = float(vb[3]) if len(vb) == 4 else 0.0
 
-    mm_per_px = MM_PER_INCH / 96.0 if _has_unit(width) else unitless_mm
+    mm_per_px = MM_PER_INCH / 96.0 if _has_physical_unit(width) else unitless_mm
     width_px = _length_to_px(width) if width else vb_w
     height_px = _length_to_px(height) if height else vb_h
     px_per_user = width_px / vb_w if (vb_w and width_px) else 1.0
@@ -425,9 +432,25 @@ def polylines_from_bytes(
 # Transformationen
 # ---------------------------------------------------------------------------
 
+def scale(
+    polylines: list[Polyline], sx: float, sy: float, about: Point | None = None
+) -> list[Polyline]:
+    """Skaliert um ``about`` (Default: Ursprung)."""
+    ox, oy = about or (0.0, 0.0)
+    return [
+        Polyline(
+            [((x - ox) * sx + ox, (y - oy) * sy + oy) for (x, y) in pl.points],
+            pl.closed,
+            pl.color,
+            pl.kind,
+        )
+        for pl in polylines
+    ]
+
+
 def translate(polylines: list[Polyline], dx: float, dy: float) -> list[Polyline]:
     return [
-        Polyline([(x + dx, y + dy) for (x, y) in pl.points], pl.closed, pl.color)
+        Polyline([(x + dx, y + dy) for (x, y) in pl.points], pl.closed, pl.color, pl.kind)
         for pl in polylines
     ]
 
@@ -444,7 +467,7 @@ def rotate(polylines: list[Polyline], degrees: float, about: Point | None = None
         for x, y in pl.points:
             tx, ty = x - ox, y - oy
             pts.append((ox + tx * cos_a - ty * sin_a, oy + tx * sin_a + ty * cos_a))
-        out.append(Polyline(pts, pl.closed, pl.color))
+        out.append(Polyline(pts, pl.closed, pl.color, pl.kind))
     return out
 
 
@@ -454,7 +477,7 @@ def mirror_x(polylines: list[Polyline], axis_x: float | None = None) -> list[Pol
         minx, _, maxx, _ = bounds_of(polylines)
         axis_x = (minx + maxx) / 2.0
     return [
-        Polyline([(2 * axis_x - x, y) for (x, y) in pl.points], pl.closed, pl.color)
+        Polyline([(2 * axis_x - x, y) for (x, y) in pl.points], pl.closed, pl.color, pl.kind)
         for pl in polylines
     ]
 
@@ -463,6 +486,25 @@ def move_to_origin(polylines: list[Polyline], margin: float = 0.0) -> list[Polyl
     """Verschiebt so, dass die Bounding-Box bei (margin, margin) beginnt."""
     minx, miny, _, _ = bounds_of(polylines)
     return translate(polylines, -minx + margin, -miny + margin)
+
+
+def align_to_origin(
+    polylines: list[Polyline], *, corner: str = "bottom_left", margin: float = 0.0
+) -> list[Polyline]:
+    """Legt die Bounding-Box an den Plotter-Ursprung.
+
+    ``bottom_left``: linke untere Ecke bei (margin, margin), X nach rechts.
+    ``bottom_right``: rechte untere Ecke am Ursprung (Mimaki/FineCut). Maschinen-X
+    ist der Abstand von dieser Kante und waechst in die Folie hinein. Die Form
+    bleibt seitenrichtig, wenn die Vorschau +X nach links zeichnet.
+    """
+    work = move_to_origin(polylines, margin=margin)
+    if corner != "bottom_right" or not work:
+        return work
+    _, _, maxx, _ = bounds_of(work)
+    return [
+        Polyline([(maxx - x, y) for (x, y) in pl.points], pl.closed, pl.color, pl.kind) for pl in work
+    ]
 
 
 def bounds_of(polylines: list[Polyline]) -> tuple[float, float, float, float]:
@@ -502,7 +544,7 @@ def apply_overcut(pl: Polyline, overcut_mm: float) -> Polyline:
             break
         out.append(b)
         remaining -= seg
-    return Polyline(out, closed=pl.closed, color=pl.color)
+    return Polyline(out, closed=pl.closed, color=pl.color, kind=pl.kind)
 
 
 def ensure_direction(pl: Polyline, ccw: bool) -> Polyline:
@@ -510,7 +552,7 @@ def ensure_direction(pl: Polyline, ccw: bool) -> Polyline:
     if not pl.closed or len(pl.points) < 3:
         return pl
     if pl.is_ccw() != ccw:
-        return Polyline(list(reversed(pl.points)), closed=pl.closed, color=pl.color)
+        return Polyline(list(reversed(pl.points)), closed=pl.closed, color=pl.color, kind=pl.kind)
     return pl
 
 
@@ -553,6 +595,7 @@ def sort_cut_order(
     if not items:
         return []
 
+    levels: list[list[Polyline]] = [items]
     if inner_first:
         depth: list[int] = []
         for i, inner in enumerate(items):
@@ -562,29 +605,32 @@ def sort_cut_order(
                     d += 1
             depth.append(d)
         # groessere Tiefe (weiter innen) zuerst -- stabil nach Ausgangsindex
-        order = sorted(range(len(items)), key=lambda k: (-depth[k], k))
-        items = [items[k] for k in order]
+        levels = [
+            [items[k] for k in range(len(items)) if depth[k] == d]
+            for d in sorted(set(depth), reverse=True)
+        ]
 
     if not minimize_travel:
-        return items
+        return [pl for level in levels for pl in level]
 
-    # Greedy-Nearest-Neighbour ab (0,0), Reihenfolge innerhalb Tiefengruppen
-    # bleibt grob erhalten, weil wir nur die Leerfahrt minimieren.
+    # Greedy-Nearest-Neighbour ab (0,0), nur innerhalb einer Tiefe: sonst wuerde
+    # ein Aussenpfad vor seinen Innenpfaden geschnitten.
     result: list[Polyline] = []
-    remaining = items[:]
     cursor: Point = (0.0, 0.0)
-    while remaining:
-        best_idx = 0
-        best_dist = math.inf
-        for idx, pl in enumerate(remaining):
-            start = pl.points[0]
-            dist = math.hypot(start[0] - cursor[0], start[1] - cursor[1])
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = idx
-        chosen = remaining.pop(best_idx)
-        result.append(chosen)
-        cursor = chosen.points[-1]
+    for level in levels:
+        remaining = level[:]
+        while remaining:
+            best_idx = 0
+            best_dist = math.inf
+            for idx, pl in enumerate(remaining):
+                start = pl.points[0]
+                dist = math.hypot(start[0] - cursor[0], start[1] - cursor[1])
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+            chosen = remaining.pop(best_idx)
+            result.append(chosen)
+            cursor = chosen.points[-1]
     return result
 
 
@@ -614,6 +660,7 @@ def prepare_job(
     sort: bool = True,
     inner_first: bool = True,
     margin_mm: float = 0.0,
+    origin: str = "bottom_left",
 ) -> CutJob:
     """Wendet Transformationen, Sortierung, Richtung und Overcut der Reihe nach an."""
     work = polylines
@@ -621,7 +668,9 @@ def prepare_job(
         work = rotate(work, rotate_deg)
     if mirror:
         work = mirror_x(work)
-    work = move_to_origin(work, margin=margin_mm)
+    # "keep": Pfade sind schon platziert (Offset, Kopien). Nicht erneut an 0 schieben.
+    if origin != "keep":
+        work = align_to_origin(work, corner=origin, margin=margin_mm)
 
     if sort:
         work = sort_cut_order(work, inner_first=inner_first, minimize_travel=True)

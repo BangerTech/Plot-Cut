@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtWidgets import QMessageBox
+from .ui import popup
 
 from . import geometry as g
 from . import settings as settings_mod
@@ -104,7 +104,7 @@ class AppController:
 
         if not exe:
             if prompt:
-                QMessageBox.warning(
+                popup.warning(
                     self.panel,
                     "Steuerkanal nicht aktiv",
                     "VectorCraft wurde nicht gefunden. Bitte einmal im Setup den "
@@ -116,7 +116,7 @@ class AppController:
             return False
 
         if prompt:
-            answer = QMessageBox.question(
+            start = popup.question(
                 self.panel,
                 "VectorCraft neu starten?",
                 "Der VectorCraft-Steuerkanal ist nicht aktiv.\n\n"
@@ -126,12 +126,12 @@ class AppController:
                 "(Bitte vorher ungespeicherte Arbeit in einem evtl. offenen "
                 "VectorCraft sichern.)",
             )
-            if answer != QMessageBox.Yes:
+            if not start:
                 return False
 
         self._status("Starte VectorCraft ...")
         if not vc_launcher.launch_with_control(exe, self.vc.port):
-            QMessageBox.critical(
+            popup.critical(
                 self.panel, "Start fehlgeschlagen", f"VectorCraft ({exe}) ließ sich nicht starten."
             )
             return False
@@ -157,7 +157,7 @@ class AppController:
             selection = self.vc.export_selection()
         except VcControlError as exc:
             self._status("Fehler")
-            QMessageBox.warning(
+            popup.warning(
                 self.panel,
                 "Keine Auswahl",
                 "Die Auswahl konnte nicht geholt werden.\n\n"
@@ -174,12 +174,12 @@ class AppController:
             polylines = g.polylines_from_bytes(selection.data, selection.fmt)
         except Exception as exc:  # defensiv: Parserfehler nicht durchreichen
             self._status("Fehler beim Lesen")
-            QMessageBox.critical(self.panel, "Importfehler", str(exc))
+            popup.critical(self.panel, "Importfehler", str(exc))
             return
 
         if not polylines:
             self._status("Keine Pfade")
-            QMessageBox.information(
+            popup.information(
                 self.panel,
                 "Keine Schneidepfade",
                 "In der Auswahl wurden keine Linien/Pfade gefunden.",
@@ -189,8 +189,16 @@ class AppController:
         self._status(f"{len(polylines)} Pfade geladen")
         from .ui.plot_dialog import PlotDialog
 
-        dlg = PlotDialog(self, polylines, selection.document_path)
-        dlg.exec()
+        if self.panel is not None:
+            self.panel.hide()
+        try:
+            dlg = PlotDialog(self, polylines, selection.document_path)
+            dlg.exec()
+        except Exception as exc:
+            popup.critical(self.panel, "Plot", f"Das Plot-Fenster konnte nicht geoeffnet werden:\n{exc}")
+        finally:
+            if self.panel is not None:
+                self.panel.show()
         self._status("Bereit")
 
     def on_setup(self) -> None:
@@ -221,13 +229,13 @@ class AppController:
             f"{self.profile_name} ({transport.describe()}): " + ("OK" if tr_ok else "Fehler"),
             tr_msg,
         ]
-        QMessageBox.information(self.panel, "Verbindungstest", "\n".join(lines))
+        popup.information(self.panel, "Verbindungstest", "\n".join(lines))
         self._status("Test abgeschlossen")
 
     def show_info(self) -> None:
         from . import __version__
 
-        QMessageBox.information(
+        popup.information(
             self.panel,
             "Plot Cut",
             f"Plot Cut v{__version__}\n\n"

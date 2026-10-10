@@ -128,7 +128,18 @@ def _http_detail(exc: urllib.error.HTTPError) -> str:
         409: "Geraet ist belegt (z. B. per USB/IP an einen PC angehaengt)",
         503: "Geraet ist nicht angeschlossen",
     }
-    return str(detail or messages.get(exc.code, f"HTTP {exc.code}"))
+    text = str(detail or messages.get(exc.code, f"HTTP {exc.code}"))
+    low = text.lower()
+    if "0a50" in low or "gerätedatei" in low or "geraetedatei" in low:
+        text += (
+            "\n\nDer Mimaki haengt bei Loki im USB/IP-Modus fuer FineCut. "
+            "Plot Cut schickt den Auftrag an die USB-Bridge von Loki, und die sieht "
+            "das Geraet in diesem Modus nicht.\n\n"
+            "Es wurde nichts an den Plotter geschrieben.\n\n"
+            "Abhilfe: Im Setup unter Verbindung die Art \"Mimaki USB (lokal, wie FineCut)\" "
+            "waehlen. Dann schreibt Plot Cut wie FineCut an den per USB/IP angehaengten Cutter."
+        )
+    return text
 
 
 @dataclass
@@ -161,28 +172,148 @@ class SerialTransport:
     baud: int = 9600
     timeout: float = 10.0
 
+    def _resolve_port(self) -> str:
+        """``auto`` sucht einen USB-Seriell-Wandler (CH340 wie beim Vevor), auch per USB/IP."""
+        if self.port.strip().lower() != "auto":
+            return self.port
+        _import_serial()
+        from serial.tools import list_ports  # type: ignore
+
+        ports = list(list_ports.comports())
+        for vid in AUTO_SERIAL_VIDS:
+            for info in ports:
+                if info.vid == vid:
+                    return info.device
+        raise TransportError(
+            "Kein USB-Seriell-Plotter (CH340) gefunden. Ist der Plotter im Loki-Client "
+            "an diesen PC angehaengt?"
+        )
+
     def send(self, data: bytes) -> None:
         serial = _import_serial()
+        port = self._resolve_port()
         try:
-            with serial.Serial(self.port, self.baud, timeout=self.timeout) as ser:
+            with serial.Serial(port, self.baud, timeout=self.timeout) as ser:
                 ser.write(data)
                 ser.flush()
         except Exception as exc:  # pyserial wirft SerialException
-            raise TransportError(f"Serielles Senden an {self.port} fehlgeschlagen: {exc}") from exc
+            raise TransportError(f"Serielles Senden an {port} fehlgeschlagen: {exc}") from exc
 
     def test(self) -> tuple[bool, str]:
         try:
             serial = _import_serial()
+            port = self._resolve_port()
         except TransportError as exc:
             return False, str(exc)
         try:
-            with serial.Serial(self.port, self.baud, timeout=self.timeout):
-                return True, f"Port {self.port} geoeffnet."
+            with serial.Serial(port, self.baud, timeout=self.timeout):
+                return True, f"Port {port} geoeffnet."
         except Exception as exc:
-            return False, f"Port {self.port} nicht verfuegbar: {exc}"
+            return False, f"Port {port} nicht verfuegbar: {exc}"
 
     def describe(self) -> str:
         return f"COM {self.port} @ {self.baud}"
+
+
+AUTO_SERIAL_VIDS = (0x1A86,)  # WCH CH340/CH341
+
+MKUSB_INTERFACE_GUID = "{fe05b407-0142-458b-ab3d-f7180561e884}"
+
+
+def find_mimaki_usb_paths() -> list[str]:
+    """Geraetepfade des Mimaki-Treibers ``mkusb`` (wie FineCut sie oeffnet).
+
+    Findet auch Cutter, die Loki per USB/IP an diesen PC haengt.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return []
+    key_path = rf"SYSTEM\CurrentControlSet\Control\DeviceClasses\{MKUSB_INTERFACE_GUID}"
+    paths: list[str] = []
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+    except OSError:
+        return []
+    with root:
+        i = 0
+        while True:
+            try:
+                name = winreg.EnumKey(root, i)
+            except OSError:
+                break
+            i += 1
+            if name.startswith("##?#"):
+                paths.append("\\\\?\\" + name[4:])
+    return paths
+
+
+@dataclass
+class MimakiUsbTransport:
+    """Schreibt direkt an den Mimaki-USB-Treiber, wie FineCut.
+
+    Bei Loki im USB/IP-Modus haengt der Cutter als lokales USB-Geraet an diesem PC.
+    """
+
+    device_path: str = ""
+    chunk: int = 4096
+
+    def _open(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        candidates = [self.device_path] if self.device_path else find_mimaki_usb_paths()
+        if not candidates:
+            raise TransportError(
+                "Kein Mimaki-USB-Geraet gefunden. Ist der Cutter per Loki-Client (USB/IP) "
+                "an diesen PC angehaengt und der Mimaki-Treiber installiert?"
+            )
+        invalid = wintypes.HANDLE(-1).value
+        last_err = 0
+        for path in candidates:
+            handle = kernel.CreateFileW(path, 0x40000000 | 0x80000000, 0x3, None, 3, 0, None)
+            if handle and handle != invalid:
+                return kernel, handle, path
+            last_err = ctypes.get_last_error()
+        raise TransportError(
+            "Mimaki-USB-Geraet laesst sich nicht oeffnen "
+            f"(Windows-Fehler {last_err}). Ist der Cutter eingeschaltet und angehaengt?"
+        )
+
+    def send(self, data: bytes) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel, handle, path = self._open()
+        try:
+            written = wintypes.DWORD(0)
+            for start in range(0, len(data), self.chunk):
+                block = data[start : start + self.chunk]
+                ok = kernel.WriteFile(handle, block, len(block), ctypes.byref(written), None)
+                if not ok or written.value != len(block):
+                    raise TransportError(
+                        f"Schreiben an den Mimaki abgebrochen nach {start + written.value} "
+                        f"von {len(data)} Bytes (Windows-Fehler {ctypes.get_last_error()})."
+                    )
+        finally:
+            kernel.CloseHandle(handle)
+
+    def test(self) -> tuple[bool, str]:
+        try:
+            kernel, handle, path = self._open()
+        except TransportError as exc:
+            return False, str(exc)
+        kernel.CloseHandle(handle)
+        return True, f"Mimaki-USB-Geraet bereit:\n{path}"
+
+    def describe(self) -> str:
+        return "Mimaki USB (lokal)"
 
 
 @dataclass
@@ -230,6 +361,8 @@ def build_transport(cfg: dict) -> Transport:
         return SerialTransport(
             port=cfg.get("serial_port", "COM3"), baud=int(cfg.get("baud", 9600))
         )
+    if kind == "mimaki_usb":
+        return MimakiUsbTransport(device_path=cfg.get("usb_path", ""))
     if kind == "file":
         return FileTransport(path=cfg.get("file_path", "out.plt"))
     raise TransportError(f"Unbekannter Transport: {kind}")

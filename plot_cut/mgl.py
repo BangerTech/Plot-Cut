@@ -27,9 +27,9 @@ class CutCondition:
     """Schneidbedingung fuer eine Farbe/Ebene."""
 
     tool: int = 1
-    speed: int = 30  # cm/s
-    pressure: int = 100  # g
-    offset: float = 0.3  # mm
+    speed: int | None = 30  # cm/s, None = Wert am Plotter lassen
+    pressure: int | None = 100  # g
+    offset: float | None = 0.3  # mm
     enabled: bool = True
 
 
@@ -38,6 +38,8 @@ class PlotOptions:
     language: str = "mgl2"  # "mgl2" | "hpgl"
     origin_bottom_left: bool = True
     emit_conditions: bool = True
+    group_by_color: bool = True
+    park_mm: tuple[float, float] | None = None  # Kopfposition nach dem Schnitt
 
 
 def mm_to_steps(value_mm: float) -> int:
@@ -53,9 +55,11 @@ def _condition_commands(cond: CutCondition, language: str) -> list[str]:
     # Werkzeugwahl ist modellabhaengig; bei MGL ueblich mit ``!FW`` oder Logical
     # Pen ``SPn``. Wir nutzen SP fuer breite Kompatibilitaet.
     cmds.append(f"SP{cond.tool};")
-    cmds.append(f"VS{cond.speed};")
-    cmds.append(f"FS{cond.pressure};")
-    if language == "mgl2":
+    if cond.speed is not None:
+        cmds.append(f"VS{cond.speed};")
+    if cond.pressure is not None:
+        cmds.append(f"FS{cond.pressure};")
+    if language == "mgl2" and cond.offset is not None:
         # Klingenoffset in mm, als Hundertstel mm ueblich. Wir geben mm*100.
         cmds.append(f"!PT{int(round(cond.offset * 100))};")
     return cmds
@@ -76,26 +80,33 @@ def generate(
 
     lines: list[str] = ["IN;"]
 
-    # Pfade nach Farbe gruppieren, Reihenfolge der ersten Vorkommen beibehalten.
-    groups: list[tuple[str, list[Polyline]]] = []
+    # Jede Farbe: nach Farbe gruppieren, Reihenfolge der ersten Vorkommen beibehalten.
+    # Alle: Schnittreihenfolge bleibt, Bedingung wird nur beim Wechsel neu gesetzt.
+    groups: list[tuple[CutCondition, list[Polyline]]] = []
     index: dict[str, int] = {}
     for pl in job.polylines:
-        if pl.color not in index:
-            index[pl.color] = len(groups)
-            groups.append((pl.color, []))
-        groups[index[pl.color]][1].append(pl)
+        cond = conditions_by_color.get(pl.color, default_condition)
+        if not cond.enabled:
+            continue
+        if options.group_by_color:
+            if pl.color not in index:
+                index[pl.color] = len(groups)
+                groups.append((cond, []))
+            groups[index[pl.color]][1].append(pl)
+        elif groups and groups[-1][0] == cond:
+            groups[-1][1].append(pl)
+        else:
+            groups.append((cond, [pl]))
 
     for _copy in range(max(1, copies)):
-        for color, pls in groups:
-            cond = conditions_by_color.get(color, default_condition)
-            if not cond.enabled:
-                continue
+        for cond, pls in groups:
             if options.emit_conditions:
                 lines.extend(_condition_commands(cond, options.language))
             for pl in pls:
                 lines.extend(_polyline_commands(pl))
 
-    lines.append("PU0,0;")
+    park = options.park_mm or (0.0, 0.0)
+    lines.append(f"PU{_coord(*park)};")
     return "\n".join(lines) + "\n"
 
 

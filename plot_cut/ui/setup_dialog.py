@@ -5,8 +5,8 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSpinBox,
     QStackedWidget,
@@ -26,15 +25,18 @@ from PySide6.QtWidgets import (
 
 from .. import settings as settings_mod
 from ..transport import LokiTransport, TransportError, build_transport
+from .popup import information, question, warning
+from .style import FINECUT_STYLE, ComboBox
 
 if TYPE_CHECKING:
     from ..app import AppController
 
 TRANSPORT_KINDS = [
-    ("loki", "Loki-Server (empfohlen)"),
+    ("loki", "Loki-Server (USB-Bridge)"),
     ("tcp", "TCP roh (socat / Port 9100)"),
     ("serial", "COM-Port"),
     ("file", "Datei (.plt, zum Testen)"),
+    ("mimaki_usb", "Mimaki USB (lokal, wie FineCut)"),
 ]
 
 
@@ -48,6 +50,8 @@ class SetupDialog(QDialog):
         self.current: str = self.work["active_profile"]
 
         self.setWindowTitle("Plotter / User Setup")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setStyleSheet(FINECUT_STYLE)
         self.resize(500, 640)
 
         root = QVBoxLayout(self)
@@ -96,7 +100,7 @@ class SetupDialog(QDialog):
     def _build_profile_box(self) -> QGroupBox:
         box = QGroupBox("Plotter-Profil")
         lay = QHBoxLayout(box)
-        self.profile_combo = QComboBox()
+        self.profile_combo = ComboBox()
         self.profile_combo.currentTextChanged.connect(self._on_profile_selected)
         lay.addWidget(self.profile_combo, 1)
         for text, slot in (
@@ -114,7 +118,7 @@ class SetupDialog(QDialog):
         form = QFormLayout(box)
         self.model = QLineEdit()
         form.addRow("Modell", self.model)
-        self.language = QComboBox()
+        self.language = ComboBox()
         self.language.addItem("MGL-IIc (Mimaki)", "mgl2")
         self.language.addItem("HP-GL (z. B. Vevor)", "hpgl")
         form.addRow("Sprache", self.language)
@@ -128,7 +132,7 @@ class SetupDialog(QDialog):
         lay = QVBoxLayout(box)
         row = QHBoxLayout()
         row.addWidget(QLabel("Art"))
-        self.kind = QComboBox()
+        self.kind = ComboBox()
         for key, label in TRANSPORT_KINDS:
             self.kind.addItem(label, key)
         self.kind.currentIndexChanged.connect(lambda i: self.stack.setCurrentIndex(i))
@@ -140,6 +144,7 @@ class SetupDialog(QDialog):
         self.stack.addWidget(self._build_tcp_page())
         self.stack.addWidget(self._build_serial_page())
         self.stack.addWidget(self._build_file_page())
+        self.stack.addWidget(self._build_mimaki_usb_page())
         lay.addWidget(self.stack)
 
         test_btn = QPushButton("Verbindung testen")
@@ -156,7 +161,7 @@ class SetupDialog(QDialog):
         self.loki_port.setRange(1, 65535)
         form.addRow("Port", self.loki_port)
         dev_row = QHBoxLayout()
-        self.loki_device = QComboBox()
+        self.loki_device = ComboBox()
         self.loki_device.setEditable(True)
         dev_row.addWidget(self.loki_device, 1)
         fetch = QPushButton("Geraete laden")
@@ -181,6 +186,8 @@ class SetupDialog(QDialog):
         w = QWidget()
         form = QFormLayout(w)
         self.serial_port = QLineEdit()
+        self.serial_port.setPlaceholderText("z. B. COM5 oder auto")
+        self.serial_port.setToolTip("auto = CH340-Plotter (z. B. Vevor) selbst finden, auch per Loki-Client angehaengt")
         form.addRow("COM-Port", self.serial_port)
         self.baud = QSpinBox()
         self.baud.setRange(300, 921600)
@@ -192,6 +199,20 @@ class SetupDialog(QDialog):
         form = QFormLayout(w)
         self.file_path = QLineEdit()
         form.addRow("Dateipfad", self.file_path)
+        return w
+
+    def _build_mimaki_usb_page(self) -> QWidget:
+        w = QWidget()
+        form = QFormLayout(w)
+        hint = QLabel(
+            "Schreibt wie FineCut an den Mimaki-USB-Treiber. Funktioniert, wenn der "
+            "Loki-Client den Cutter per USB/IP an diesen PC haengt."
+        )
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        self.usb_path = QLineEdit()
+        self.usb_path.setPlaceholderText("leer = automatisch finden")
+        form.addRow("Geraetepfad", self.usb_path)
         return w
 
     def _build_condition_box(self) -> QGroupBox:
@@ -212,7 +233,7 @@ class SetupDialog(QDialog):
     def _build_favorites_box(self) -> QGroupBox:
         box = QGroupBox("Favoriten (Schneidbedingungen)")
         lay = QHBoxLayout(box)
-        self.fav_combo = QComboBox()
+        self.fav_combo = ComboBox()
         self._reload_favorites()
         lay.addWidget(self.fav_combo, 1)
         load_btn = QPushButton("Laden")
@@ -245,6 +266,7 @@ class SetupDialog(QDialog):
         self.serial_port.setText(t.get("serial_port", "COM3"))
         self.baud.setValue(int(t.get("baud", 9600)))
         self.file_path.setText(t.get("file_path", "out.plt"))
+        self.usb_path.setText(t.get("usb_path", ""))
 
         self.speed.setValue(int(d.get("speed", 30)))
         self.pressure.setValue(int(d.get("pressure", 100)))
@@ -283,6 +305,7 @@ class SetupDialog(QDialog):
             "serial_port": self.serial_port.text().strip(),
             "baud": self.baud.value(),
             "file_path": self.file_path.text().strip(),
+            "usb_path": self.usb_path.text().strip(),
         }
 
     # -- Profile verwalten -------------------------------------------------
@@ -307,7 +330,7 @@ class SetupDialog(QDialog):
         if not ok or not name:
             return
         if name in self.work["profiles"]:
-            QMessageBox.warning(self, "Neuer Plotter", f"'{name}' gibt es schon.")
+            warning(self, "Neuer Plotter", f"'{name}' gibt es schon.")
             return
         self._store_form(self.current)
         settings_mod.new_profile(self.work, name, copy_from=self.current)
@@ -322,17 +345,16 @@ class SetupDialog(QDialog):
             return
         self._store_form(self.current)
         if not settings_mod.rename_profile(self.work, self.current, new):
-            QMessageBox.warning(self, "Umbenennen", f"'{new}' ist schon vergeben.")
+            warning(self, "Umbenennen", f"'{new}' ist schon vergeben.")
             return
         self.current = new
         self._reload_profile_combo()
 
     def _delete_profile(self) -> None:
         if len(self.work["profiles"]) <= 1:
-            QMessageBox.information(self, "Loeschen", "Mindestens ein Plotter muss bleiben.")
+            information(self, "Loeschen", "Mindestens ein Plotter muss bleiben.")
             return
-        answer = QMessageBox.question(self, "Loeschen", f"Plotter '{self.current}' loeschen?")
-        if answer != QMessageBox.Yes:
+        if not question(self, "Loeschen", f"Plotter '{self.current}' loeschen?"):
             return
         settings_mod.delete_profile(self.work, self.current)
         self.current = self.work["active_profile"]
@@ -353,7 +375,7 @@ class SetupDialog(QDialog):
         try:
             devices = loki.list_devices()
         except TransportError as exc:
-            QMessageBox.warning(self, "Loki", str(exc))
+            warning(self, "Loki", str(exc))
             return
         current = self.loki_device.currentData() or self.loki_device.currentText()
         self.loki_device.clear()
@@ -364,11 +386,11 @@ class SetupDialog(QDialog):
         if idx >= 0:
             self.loki_device.setCurrentIndex(idx)
         if not devices:
-            QMessageBox.information(self, "Loki", "Loki meldet keine Plotter.")
+            information(self, "Loki", "Loki meldet keine Plotter.")
 
     def _on_test(self) -> None:
         ok, msg = build_transport(self._collect_transport()).test()
-        (QMessageBox.information if ok else QMessageBox.warning)(self, "Verbindung", msg)
+        (information if ok else warning)(self, "Verbindung", msg)
 
     def _reload_favorites(self) -> None:
         self.fav_combo.clear()

@@ -15,6 +15,7 @@ from .ui.panel import Panel
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Plot Cut")
+    app.setWindowIcon(icons.app_icon())
     app.setQuitOnLastWindowClosed(False)
 
     controller = AppController()
@@ -34,7 +35,7 @@ def main() -> int:
 
 
 def _build_tray(app: QApplication, controller: AppController, panel: Panel) -> QSystemTrayIcon:
-    tray = QSystemTrayIcon(icons.icon_wordmark(), parent=app)
+    tray = QSystemTrayIcon(icons.app_icon(), parent=app)
     tray.setToolTip("Plot Cut")
 
     menu = QMenu()
