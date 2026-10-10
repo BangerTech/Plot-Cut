@@ -15,9 +15,19 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
+from .. import i18n
 from ..geometry import Polyline
 
 MIN_SCALE = 0.05  # px pro mm
@@ -289,27 +299,40 @@ class PreviewWidget(QWidget):
         p.restore()
 
     def _paint_plot(self, p: QPainter) -> None:
-        # Wie FineCut: gefuelltes Objekt auf der weissen Folie.
+        # Wie FineCut: gefuelltes Objekt auf der weissen Folie. Teilpfade eines
+        # Pfads (Aussenlinie und Loch im P) teilen sich eine Gruppe und werden
+        # mit der Gerade-Ungerade-Regel gefuellt. Eine zusaetzliche Aussenkontur
+        # ist eine eigene Gruppe bzw. eine Linie und stanzt das P nicht aus.
+        fills: dict[tuple[int, str], QPainterPath] = {}
+        order: list[tuple[int, str]] = []
+        lines: list[tuple[Polyline, QColor]] = []
         for pl in self.polylines:
             color = QColor(pl.color if pl.color.startswith("#") else "#111111")
-            if self.cut_lines_only or pl.kind == "frame":
-                # Rahmen und Schneidelinie: nur die Linie, die der Plotter faehrt.
-                p.setBrush(Qt.NoBrush)
-                p.setPen(QPen(color, 1.4))
-                if pl.closed:
-                    p.drawPolygon(self._poly(pl))
-                else:
-                    p.drawPolyline(self._poly(pl))
-                continue
+            if not self.cut_lines_only and pl.closed and pl.kind == "path":
+                key = (pl.group, color.name())
+                path = fills.get(key)
+                if path is None:
+                    path = QPainterPath()
+                    fills[key] = path
+                    order.append(key)
+                path.addPolygon(self._poly(pl))
+                path.closeSubpath()
+            else:
+                lines.append((pl, color))
+        for key in order:
+            path = fills[key]
+            path.setFillRule(Qt.OddEvenFill)
+            color = QColor(key[1])
+            p.setPen(QPen(color, 1.0))
+            p.setBrush(color)
+            p.drawPath(path)
+        p.setBrush(Qt.NoBrush)
+        for pl, color in lines:
+            p.setPen(QPen(color, 1.4))
             if pl.closed:
-                p.setPen(QPen(color, 1.0))
-                p.setBrush(color)
                 p.drawPolygon(self._poly(pl))
             else:
-                p.setBrush(Qt.NoBrush)
-                p.setPen(QPen(color, 1.6))
                 p.drawPolyline(self._poly(pl))
-        p.setBrush(Qt.NoBrush)
 
     def _paint_plot_out(self, p: QPainter) -> None:
         drawn = 0.0
@@ -448,14 +471,14 @@ def view_buttons(preview: PreviewWidget) -> QHBoxLayout:
         "QPushButton { color: #111111; background: #ffffff; "
         "border: 1px solid #b0b0b0; padding: 6px 10px; }"
     )
-    fit = QPushButton("Einpassen")
+    fit = QPushButton(i18n.tr("Einpassen"))
     fit.setStyleSheet(btn_style)
-    fit.setToolTip("Auf das Objekt zoomen (auch Doppelklick in die Vorschau)")
+    fit.setToolTip(i18n.tr("Auf das Objekt zoomen (auch Doppelklick in die Vorschau)"))
     fit.clicked.connect(preview.fit_content)
     row.addWidget(fit)
-    sheet = QPushButton("Ganze Folie")
+    sheet = QPushButton(i18n.tr("Ganze Folie"))
     sheet.setStyleSheet(btn_style)
-    sheet.setToolTip("Gesamte Folienbreite anzeigen")
+    sheet.setToolTip(i18n.tr("Gesamte Folienbreite anzeigen"))
     sheet.clicked.connect(preview.fit_sheet)
     row.addWidget(sheet)
     return row

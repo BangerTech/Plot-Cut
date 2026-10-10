@@ -65,7 +65,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "profiles": copy.deepcopy(DEFAULT_PROFILES),
     "favorites": {},
     "per_file": {},
-    "ui": {},
+    "ui": {"language": "de"},
 }
 
 

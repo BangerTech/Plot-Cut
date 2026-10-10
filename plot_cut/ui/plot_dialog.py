@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import geometry as g
+from .. import i18n
 from .icons import round_icon
 from .popup import critical
 from .preview import PreviewWidget
@@ -78,7 +79,7 @@ class PlotDialog(QDialog):
         self._nat_h = 1.0
         self._tab = 0
 
-        self.setWindowTitle(f"Plot - {controller.profile_name}")
+        self.setWindowTitle(i18n.trf("Plot — {name}", name=controller.profile_name))
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(FINECUT_STYLE + _SIDE_STYLE)
         self.resize(1240, 860)
@@ -129,8 +130,8 @@ class PlotDialog(QDialog):
         lay.setSpacing(0)
         tabs = QHBoxLayout()
         tabs.setSpacing(0)
-        self.tab_preview = QPushButton("Vorschau")
-        self.tab_lines = QPushButton("Schneidelinie")
+        self.tab_preview = QPushButton(i18n.tr("Vorschau"))
+        self.tab_lines = QPushButton(i18n.tr("Schneidelinie"))
         for btn, index in ((self.tab_preview, 0), (self.tab_lines, 1)):
             btn.setObjectName("Seg")
             btn.setCheckable(True)
@@ -151,8 +152,8 @@ class PlotDialog(QDialog):
         btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         btn.setIcon(round_icon(name, icon_px + 8))
         btn.setIconSize(QSize(icon_px, icon_px))
-        btn.setText(text)
-        btn.setToolTip(tip)
+        btn.setText(i18n.tr(text))
+        btn.setToolTip(i18n.tr(tip))
         btn.setCursor(Qt.PointingHandCursor)
         btn.clicked.connect(handler)
         return btn
@@ -206,7 +207,7 @@ class PlotDialog(QDialog):
 
         def add_row(label: QWidget | str, left: QWidget | None, right: QWidget | None, link: QWidget | None = None) -> None:
             r = self._grid_row
-            grid.addWidget(QLabel(label) if isinstance(label, str) else label, r, 0)
+            grid.addWidget(i18n.lab(label) if isinstance(label, str) else label, r, 0)
             if left is not None:
                 grid.addWidget(self._arrow(H_ARROW), r, 1)
                 grid.addWidget(left, r, 2)
@@ -268,9 +269,11 @@ class PlotDialog(QDialog):
         add_rule()
 
         legacy = float(per_file.get("frame_mm", 0))
-        self.frame_on = QCheckBox("Rahmen")
+        self.frame_on = QCheckBox(i18n.tr("Rahmen"))
         self.frame_on.setChecked(bool(per_file.get("frame_on", legacy > 0)))
-        self.frame_on.setToolTip("Rechteck um das Motiv mitschneiden. Das Motiv rückt um den Abstand vom Ursprung weg.")
+        self.frame_on.setToolTip(i18n.tr(
+            "Rechteck um das Motiv mitschneiden. Das Motiv rückt um den Abstand vom Ursprung weg."
+        ))
         self.frame_x = self._mm(0, 500, float(per_file.get("frame_x", legacy or 10)))
         self.frame_y = self._mm(0, 500, float(per_file.get("frame_y", legacy or 10)))
         self.frame_on.toggled.connect(self._on_frame_toggled)
@@ -295,7 +298,7 @@ class PlotDialog(QDialog):
         lab.setObjectName("Link")
         lab.setAlignment(Qt.AlignCenter)
         lab.setFixedWidth(16)
-        lab.setToolTip("Seitenverhältnis gekoppelt (Verzerren aus)")
+        lab.setToolTip(i18n.tr("Seitenverhältnis gekoppelt (Verzerren aus)"))
         return lab
 
     def _saved_copies(self, per_file: dict) -> tuple[int, int]:
@@ -324,50 +327,53 @@ class PlotDialog(QDialog):
         self._rotate_index = int(per_file.get("rotate_index", 0)) % 4
         opts = QGridLayout()
         opts.setHorizontalSpacing(14)
-        self.mirror = QCheckBox("Spiegeln")
+        self.mirror = QCheckBox(i18n.tr("Spiegeln"))
         self.mirror.setChecked(bool(per_file.get("mirror", False)))
         self.mirror.toggled.connect(lambda _on: self._on_rotate())
-        self.distort = QCheckBox("Verzerren")
-        self.distort.setToolTip("Breite und Höhe unabhängig ändern")
+        self.distort = QCheckBox(i18n.tr("Verzerren"))
+        self.distort.setToolTip(i18n.tr("Breite und Höhe unabhängig ändern"))
         self.distort.setChecked(bool(per_file.get("distort", False)))
         self.distort.toggled.connect(self._on_distort)
-        self.fixed_origin = QCheckBox("Nullpunkt fest")
-        self.fixed_origin.setToolTip("Motiv bleibt am Plotter-Ursprung, Bewegen und Offset sind aus")
+        self.fixed_origin = QCheckBox(i18n.tr("Nullpunkt fest"))
+        self.fixed_origin.setToolTip(i18n.tr(
+            "Motiv bleibt am Plotter-Ursprung, Bewegen und Offset sind aus"
+        ))
         self.fixed_origin.setChecked(bool(per_file.get("fixed_origin", False)))
         self.fixed_origin.toggled.connect(self._apply_fixed_origin)
         opts.addWidget(self.mirror, 0, 0)
         opts.addWidget(self.distort, 1, 0)
         opts.addWidget(self.fixed_origin, 2, 0)
 
-        mark_mid = QCheckBox("Justiermarke Mitte")
-        mark_corner = QCheckBox("Justiermarke Ecke")
+        mark_mid = QCheckBox(i18n.tr("Justiermarke Mitte"))
+        mark_corner = QCheckBox(i18n.tr("Justiermarke Ecke"))
         mark_mm = self._mm(0, 100, 10)
         for w in (mark_mid, mark_corner, mark_mm):
             w.setEnabled(False)
-            w.setToolTip("Justiermarken folgen in einer späteren Version")
+            w.setToolTip(i18n.tr("Justiermarken folgen in einer späteren Version"))
         opts.addWidget(mark_mid, 0, 1)
         opts.addWidget(mark_mm, 0, 2)
         opts.addWidget(mark_corner, 1, 1)
         unit_row = QHBoxLayout()
-        unit_row.addWidget(QLabel("Einheit:"))
+        unit_row.addWidget(i18n.lab("Einheit:"))
         unit = ComboBox()
         unit.addItem("mm")
         unit_row.addWidget(unit, 1)
         opts.addLayout(unit_row, 2, 1, 1, 2)
         lay.addLayout(opts)
-        tabs.addTab(layout_page, "Layout")
+        tabs.addTab(layout_page, i18n.tr("Layout"))
 
         tabs.addTab(self._placeholder(
-            "Kacheln: große Motive in Bahnen mit Überlappung aufteilen. "
-            "Kommt in einer späteren Version."), "Kacheln Abstand")
+            "Kacheln: große Motive in Bahnen mit Überlappung aufteilen. Kommt in einer späteren Version."
+        ), i18n.tr("Kacheln Abstand"))
         tabs.addTab(self._placeholder(
-            "Passermarken (Konturschnitt nach Druck) kommen in einer späteren Version."), "Passermarken")
+            "Passermarken (Konturschnitt nach Druck) kommen in einer späteren Version."
+        ), i18n.tr("Passermarken"))
         return tabs
 
     def _placeholder(self, text: str) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lab = QLabel(text)
+        lab = QLabel(i18n.tr(text))
         lab.setWordWrap(True)
         lab.setStyleSheet("color: #777777;")
         lay.addWidget(lab)
@@ -391,10 +397,10 @@ class PlotDialog(QDialog):
             item.setCheckState(Qt.Unchecked if col in disabled else Qt.Checked)
             self.color_list.addItem(item)
         self.color_list.itemChanged.connect(lambda _item: self._refresh(refit=False))
-        tabs.addTab(self.color_list, "Farbe")
+        tabs.addTab(self.color_list, i18n.tr("Farbe"))
         tabs.addTab(self._placeholder(
-            "Ebenen kommen, sobald VectorCraft sie mit der Auswahl liefert. "
-            "Bis dahin über die Farbe wählen."), "Ebene")
+            "Ebenen kommen, sobald VectorCraft sie mit der Auswahl liefert. Bis dahin über die Farbe wählen."
+        ), i18n.tr("Ebene"))
         return tabs
 
     # -- Ereignisse --------------------------------------------------------
@@ -659,7 +665,7 @@ class PlotDialog(QDialog):
         self.total_h.setText(f"{V_ARROW} {h:.1f} mm")
         too_wide = maxx > self.sheet_width.value() + 1e-6
         self.total_w.setStyleSheet("color: #c62828;" if too_wide else "")
-        self.total_w.setToolTip("Breiter als die Folie" if too_wide else "")
+        self.total_w.setToolTip(i18n.tr("Breiter als die Folie") if too_wide else "")
         if refit:
             self.preview.fit_sheet()
 
@@ -706,7 +712,9 @@ class PlotDialog(QDialog):
             if dlg.exec() == QDialog.Accepted:
                 self.accept()
         except Exception as exc:
-            critical(self, "Ausplotten", f"Das Ausplotten-Fenster konnte nicht geoeffnet werden:\n{exc}")
+            critical(self, "Ausplotten", i18n.trf(
+                "Das Ausplotten-Fenster konnte nicht geoeffnet werden:\n{exc}", exc=exc
+            ))
 
 
 class MoveDialog(QDialog):
@@ -718,11 +726,11 @@ class MoveDialog(QDialog):
         super().__init__(parent)
         self.anchor: tuple[float, float] | None = None
         self._corner = corner
-        self.setWindowTitle("Bewegen")
+        self.setWindowTitle(i18n.tr("Bewegen"))
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(FINECUT_STYLE)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Position auf der Folie"))
+        lay.addWidget(i18n.lab("Position auf der Folie"))
         grid = QGridLayout()
         grid.setSpacing(4)
         for i, arrow in enumerate(self.ARROWS):
@@ -736,7 +744,7 @@ class MoveDialog(QDialog):
             btn.clicked.connect(lambda _c=False, a=anchor: self._pick(a))
             grid.addWidget(btn, row, col)
         lay.addLayout(grid)
-        close = QPushButton("Abbrechen")
+        close = QPushButton(i18n.tr("Abbrechen"))
         close.clicked.connect(self.reject)
         lay.addWidget(close)
 

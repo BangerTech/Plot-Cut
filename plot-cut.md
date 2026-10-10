@@ -93,6 +93,23 @@ Die GUI (PySide6) sitzt obenauf:
 - Hinweise (Info, Warnung, Fehler) bleiben vor dem immer-oben-Panel und brechen den Text um (`ui/popup.py`).
 - Dropdowns (Kopienrichtung, Profile) oeffnen sich ebenfalls vor dem Fenster, mit dunkler Schrift auf weiss.
 - Die Kacheln im Panel zentrieren Icon und Beschriftung.
+- **Oberfläche** im Setup: `ui.language` ist `de` oder `en`. Deutsch bleibt der
+  Quelltext (`plot_cut/i18n.py`), English übersetzt Fenster, Panel, Hinweise und
+  Verbindungstexte. Die Befehlssprache des Plotters (MGL-IIc / HP-GL) ist davon
+  getrennt. Der Wechsel gilt sofort für das Panel und das offene Setup. Abbrechen
+  stellt die vorige Sprache wieder her.
+- **Kontur** (FineCut): kein Extra-Fenster und kein Plot-Fenster. VectorCraft
+  liefert Text als `<text>` ohne Pfad. Kontur macht daraus `type.createOutlines`.
+  Liegt auf dem Motiv ein Strich, der es groesser oder die Linien breiter macht
+  (Aussehen-Bedienfeld, Ausrichtung Mitte oder Aussen), ersetzt
+  `object.path.offsetPath` die Form durch die aeusserste Kante: halbe sichtbare
+  Strichbreite bei Mitte, die ganze bei Aussen (Text-Skalierung aus der
+  SVG-Matrix). Das Loch im Buchstaben bleibt im Compound. Geloescht werden nur
+  die alten Pfade, der Strich faellt weg. Ohne Strich bleibt die Glyphe samt
+  Loch. Ein Strich nur innen aendert die Aussenkante nicht. Plot auf reinem Text
+  weist auf Kontur hin. Rueckgaengig mit Undo in VectorCraft.
+- Vorschau fuellt Teilpfade eines Pfads mit der Gerade-Ungerade-Regel, damit
+  das Loch im P frei bleibt. Der Tab Schneidelinie zeigt alle Schnittlinien.
 
 ## Einstellungen (keine Datenbank)
 
@@ -166,7 +183,10 @@ Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
     // }
     // Alte Schluessel copies/copy_axis/copy_gap/frame_mm werden beim Oeffnen uebernommen.
   },
-  "ui": { "panel_geometry": "..." }
+  "ui": {
+    "language": "de",             // "de" | "en", Oberflaeche (nicht die Befehlssprache)
+    "panel_pos": [0, 0]
+  }
 }
 ```
 
@@ -285,6 +305,9 @@ Zum Entwickeln: `run.bat` (startet aus dem venv mit Python 3.12) und `start-vect
 
 Ergebnis: `dist\Plot Cut.exe` (~45 MB, enthaelt Python + PySide6). Einstieg ist `run_app.py`.
 Danach Desktop- und Startmenue-Verknuepfung "Plot Cut.lnk" auf diese Datei anlegen.
+Das Spec-File ist `Plot Cut.spec` (Icon nur unter Windows, unter macOS zusaetzlich ein
+`.app`-Bundle). Ein veroeffentlichtes GitHub-Release startet `.github/workflows/release.yml`
+und haengt `Plot-Cut-windows.zip`, `Plot-Cut-macos.zip` und `Plot-Cut-linux.zip` an.
 
 ## Phase 2 (spaeter)
 

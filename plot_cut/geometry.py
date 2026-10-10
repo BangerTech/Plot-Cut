@@ -29,7 +29,8 @@ class Polyline:
     points: list[Point]
     closed: bool = False
     color: str = "#000000"
-    kind: str = "path"  # "path" oder "frame" (Rahmen, nur Kontur)
+    kind: str = "path"  # "path" (gefuellt), "line" (fill="none") oder "frame" (Rahmen)
+    group: int = 0  # Teilpfade eines SVG-Pfads (z. B. Loch im P) teilen sich die Gruppe
 
     def is_empty(self) -> bool:
         return len(self.points) < 2
@@ -148,6 +149,7 @@ def _polylines_from_svg_svgelements(data: bytes, flatness: float) -> list[Polyli
 
     mm_per_px, height_px, _ = _svg_scale(text)
     polylines: list[Polyline] = []
+    group = 0
 
     for element in svg.elements():
         if not isinstance(element, Path):
@@ -160,13 +162,15 @@ def _polylines_from_svg_svgelements(data: bytes, flatness: float) -> list[Polyli
         if len(element) == 0:
             continue
 
+        group += 1
         color = _stroke_or_fill_color(element)
+        kind = "path" if _is_filled(element) else "line"
         current: list[Point] = []
         start: Point | None = None
 
         for seg in element:
             if isinstance(seg, Move):
-                _flush(polylines, current, False, color)
+                _flush(polylines, current, False, color, kind, group)
                 current = [(_pt(seg.end))]
                 start = current[0]
             elif isinstance(seg, Line):
@@ -190,10 +194,10 @@ def _polylines_from_svg_svgelements(data: bytes, flatness: float) -> list[Polyli
             elif isinstance(seg, Close):
                 if start is not None and current and current[-1] != start:
                     current.append(start)
-                _flush(polylines, current, True, color)
+                _flush(polylines, current, True, color, kind, group)
                 current = []
                 start = None
-        _flush(polylines, current, False, color)
+        _flush(polylines, current, False, color, kind, group)
 
     polylines = [_px_polyline_to_mm(pl, height_px, mm_per_px) for pl in polylines]
     return [pl for pl in polylines if not pl.is_empty()]
@@ -220,6 +224,12 @@ def _stroke_or_fill_color(element) -> str:
     return "#000000"
 
 
+def _is_filled(element) -> bool:
+    """SVG fuellt ohne ``fill``-Angabe schwarz; nur ``fill="none"`` ist reine Linie."""
+    val = element.values.get("fill") if hasattr(element, "values") else None
+    return not (val and str(val).lower() in ("none", "transparent"))
+
+
 def _normalize_color(val: str) -> str:
     val = val.strip()
     if val.startswith("#"):
@@ -232,7 +242,7 @@ def _normalize_color(val: str) -> str:
 def _px_polyline_to_mm(pl: Polyline, height_px: float, mm_per_px: float) -> Polyline:
     h_mm = height_px * mm_per_px
     pts = [(x * mm_per_px, h_mm - y * mm_per_px) for (x, y) in pl.points]
-    return Polyline(points=pts, closed=pl.closed, color=pl.color)
+    return _carry(pl, pts)
 
 
 def _has_physical_unit(value: str | None) -> bool:
@@ -290,9 +300,27 @@ def _length_to_px(value: str) -> float:
         return 0.0
 
 
-def _flush(out: list[Polyline], pts: list[Point], closed: bool, color: str) -> None:
+def _flush(
+    out: list[Polyline],
+    pts: list[Point],
+    closed: bool,
+    color: str,
+    kind: str = "path",
+    group: int = 0,
+) -> None:
     if len(pts) >= 2:
-        out.append(Polyline(points=list(pts), closed=closed, color=color))
+        out.append(Polyline(points=list(pts), closed=closed, color=color, kind=kind, group=group))
+
+
+def _carry(pl: Polyline, points: list[Point], closed: bool | None = None) -> Polyline:
+    """Neue Punkte, gleiche Farbe, Art und Gruppe (Loch bleibt beim Buchstaben)."""
+    return Polyline(
+        points=points,
+        closed=pl.closed if closed is None else closed,
+        color=pl.color,
+        kind=pl.kind,
+        group=pl.group,
+    )
 
 
 def _polylines_from_svg_minimal(data: bytes, flatness: float) -> list[Polyline]:
@@ -314,17 +342,20 @@ def _polylines_from_svg_minimal(data: bytes, flatness: float) -> list[Polyline]:
 
     for el in root.iter():
         tag = _tag(el)
+        fill = (el.get("fill") or "").strip().lower()
+        kind = "line" if fill in ("none", "transparent") else "path"
         color = _normalize_color(el.get("stroke") or el.get("fill") or "#000000")
+        group = len(out) + 1
         if tag in ("polyline", "polygon"):
             raw = (el.get("points") or "").replace(",", " ").split()
             nums = [float(x) for x in raw if _is_num(x)]
             pts = [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
             if len(pts) >= 2:
-                out.append(Polyline(pts, closed=(tag == "polygon"), color=color))
+                out.append(Polyline(pts, closed=(tag == "polygon"), color=color, kind=kind, group=group))
         elif tag == "line":
             try:
                 x1, y1, x2, y2 = (float(el.get(k)) for k in ("x1", "y1", "x2", "y2"))
-                out.append(Polyline([(x1, y1), (x2, y2)], color=color))
+                out.append(Polyline([(x1, y1), (x2, y2)], color=color, kind=kind, group=group))
             except (TypeError, ValueError):
                 continue
         elif tag == "rect":
@@ -336,11 +367,11 @@ def _polylines_from_svg_minimal(data: bytes, flatness: float) -> list[Polyline]:
             except (TypeError, ValueError):
                 continue
             pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
-            out.append(Polyline(pts, closed=True, color=color))
+            out.append(Polyline(pts, closed=True, color=color, kind=kind, group=group))
 
     def _to_mm(pl: Polyline) -> Polyline:
         pts = [(x * mm_per_user, height_mm - y * mm_per_user) for (x, y) in pl.points]
-        return Polyline(pts, closed=pl.closed, color=pl.color)
+        return _carry(pl, pts)
 
     return [_to_mm(pl) for pl in out if not pl.is_empty()]
 
@@ -389,7 +420,7 @@ def polylines_from_dxf(data: bytes) -> list[Polyline]:
                 elif c == "21":
                     y2 = float(v)
                 i += 1
-            out.append(Polyline([(x1, y1), (x2, y2)]))
+            out.append(Polyline([(x1, y1), (x2, y2)], group=len(out) + 1))
         elif code == "0" and value in ("LWPOLYLINE", "POLYLINE"):
             pts: list[Point] = []
             closed = False
@@ -412,7 +443,7 @@ def polylines_from_dxf(data: bytes) -> list[Polyline]:
                     pass
                 i += 1
             if len(pts) >= 2:
-                out.append(Polyline(pts, closed=closed))
+                out.append(Polyline(pts, closed=closed, group=len(out) + 1))
         else:
             i += 1
     return [pl for pl in out if not pl.is_empty()]
@@ -438,19 +469,14 @@ def scale(
     """Skaliert um ``about`` (Default: Ursprung)."""
     ox, oy = about or (0.0, 0.0)
     return [
-        Polyline(
-            [((x - ox) * sx + ox, (y - oy) * sy + oy) for (x, y) in pl.points],
-            pl.closed,
-            pl.color,
-            pl.kind,
-        )
+        _carry(pl, [((x - ox) * sx + ox, (y - oy) * sy + oy) for (x, y) in pl.points])
         for pl in polylines
     ]
 
 
 def translate(polylines: list[Polyline], dx: float, dy: float) -> list[Polyline]:
     return [
-        Polyline([(x + dx, y + dy) for (x, y) in pl.points], pl.closed, pl.color, pl.kind)
+        _carry(pl, [(x + dx, y + dy) for (x, y) in pl.points])
         for pl in polylines
     ]
 
@@ -467,7 +493,7 @@ def rotate(polylines: list[Polyline], degrees: float, about: Point | None = None
         for x, y in pl.points:
             tx, ty = x - ox, y - oy
             pts.append((ox + tx * cos_a - ty * sin_a, oy + tx * sin_a + ty * cos_a))
-        out.append(Polyline(pts, pl.closed, pl.color, pl.kind))
+        out.append(_carry(pl, pts))
     return out
 
 
@@ -477,7 +503,7 @@ def mirror_x(polylines: list[Polyline], axis_x: float | None = None) -> list[Pol
         minx, _, maxx, _ = bounds_of(polylines)
         axis_x = (minx + maxx) / 2.0
     return [
-        Polyline([(2 * axis_x - x, y) for (x, y) in pl.points], pl.closed, pl.color, pl.kind)
+        _carry(pl, [(2 * axis_x - x, y) for (x, y) in pl.points])
         for pl in polylines
     ]
 
@@ -503,7 +529,7 @@ def align_to_origin(
         return work
     _, _, maxx, _ = bounds_of(work)
     return [
-        Polyline([(maxx - x, y) for (x, y) in pl.points], pl.closed, pl.color, pl.kind) for pl in work
+        _carry(pl, [(maxx - x, y) for (x, y) in pl.points]) for pl in work
     ]
 
 
@@ -519,6 +545,43 @@ def bounds_of(polylines: list[Polyline]) -> tuple[float, float, float, float]:
         maxx = max(maxx, bx1)
         maxy = max(maxy, by1)
     return (minx, miny, maxx, maxy)
+
+
+def split_outer_and_holes(parts: list[tuple[int, dict]]) -> tuple[list[int], list[int]]:
+    """Teilt Offset-Pfade in Aussenkontur und Loecher.
+
+    Ein Teil ist ein Loch, wenn seine Box komplett in einer groesseren liegt.
+    Getrennte Buchstaben behalten dadurch jeder seine Aussenlinie.
+    ``parts`` ist ``(id, bounds)`` mit ``x``, ``y``, ``width``, ``height``.
+    """
+    keep: list[int] = []
+    holes: list[int] = []
+    for pid, bounds in parts:
+        if any(_bounds_inside(bounds, other) for oid, other in parts if oid != pid):
+            holes.append(pid)
+        else:
+            keep.append(pid)
+    return keep, holes
+
+
+def _bounds_inside(inner: dict, outer: dict, eps: float = 0.4) -> bool:
+    try:
+        ix, iy = float(inner["x"]), float(inner["y"])
+        iw, ih = float(inner["width"]), float(inner["height"])
+        ox, oy = float(outer["x"]), float(outer["y"])
+        ow, oh = float(outer["width"]), float(outer["height"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if iw <= 0 or ih <= 0 or ow <= 0 or oh <= 0:
+        return False
+    if iw * ih >= ow * oh * 0.98:
+        return False
+    return (
+        ix >= ox - eps
+        and iy >= oy - eps
+        and ix + iw <= ox + ow + eps
+        and iy + ih <= oy + oh + eps
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +607,7 @@ def apply_overcut(pl: Polyline, overcut_mm: float) -> Polyline:
             break
         out.append(b)
         remaining -= seg
-    return Polyline(out, closed=pl.closed, color=pl.color, kind=pl.kind)
+    return _carry(pl, out)
 
 
 def ensure_direction(pl: Polyline, ccw: bool) -> Polyline:
@@ -552,7 +615,7 @@ def ensure_direction(pl: Polyline, ccw: bool) -> Polyline:
     if not pl.closed or len(pl.points) < 3:
         return pl
     if pl.is_ccw() != ccw:
-        return Polyline(list(reversed(pl.points)), closed=pl.closed, color=pl.color, kind=pl.kind)
+        return _carry(pl, list(reversed(pl.points)))
     return pl
 
 

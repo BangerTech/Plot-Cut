@@ -7,6 +7,7 @@ import sys
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import i18n
 from .app import AppController
 from .ui import icons
 from .ui.panel import Panel
@@ -40,27 +41,33 @@ def _build_tray(app: QApplication, controller: AppController, panel: Panel) -> Q
 
     menu = QMenu()
 
-    act_show = QAction("Panel anzeigen", menu)
+    act_show = QAction(menu)
+    i18n.bind(act_show, text="Panel anzeigen")
     act_show.triggered.connect(panel.show)
     act_show.triggered.connect(panel.raise_)
     menu.addAction(act_show)
 
-    act_plot = QAction("Plot ...", menu)
+    act_plot = QAction(menu)
+    i18n.bind(act_plot, text="Plot ...")
     act_plot.triggered.connect(controller.on_plot)
     menu.addAction(act_plot)
 
-    act_setup = QAction("Setup ...", menu)
+    act_setup = QAction(menu)
+    i18n.bind(act_setup, text="Setup ...")
     act_setup.triggered.connect(controller.on_setup)
     menu.addAction(act_setup)
 
-    act_test = QAction("Verbindung testen", menu)
+    act_test = QAction(menu)
+    i18n.bind(act_test, text="Verbindung testen")
     act_test.triggered.connect(controller.on_test_connection)
     menu.addAction(act_test)
 
     menu.addSeparator()
-    act_quit = QAction("Beenden", menu)
+    act_quit = QAction(menu)
+    i18n.bind(act_quit, text="Beenden")
     act_quit.triggered.connect(app.quit)
     menu.addAction(act_quit)
+    i18n.watch(menu)
 
     tray.setContextMenu(menu)
 

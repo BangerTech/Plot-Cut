@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import i18n
 from .. import settings as settings_mod
 from ..transport import LokiTransport, TransportError, build_transport
 from .popup import information, question, warning
@@ -49,12 +50,14 @@ class SetupDialog(QDialog):
         settings_mod.active_profile(self.work)
         self.current: str = self.work["active_profile"]
 
-        self.setWindowTitle("Plotter / User Setup")
+        i18n.bind(self, window="Plotter / User Setup")
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(FINECUT_STYLE)
-        self.resize(500, 640)
+        self.resize(500, 680)
+        self._ui_lang_before = i18n.language()
 
         root = QVBoxLayout(self)
+        root.addWidget(self._build_language_box())
         root.addWidget(self._build_vc_box())
         root.addWidget(self._build_profile_box())
         root.addWidget(self._build_plotter_box())
@@ -63,25 +66,56 @@ class SetupDialog(QDialog):
         root.addWidget(self._build_favorites_box())
 
         btns = QHBoxLayout()
-        ok = QPushButton("Speichern")
+        ok = QPushButton()
+        i18n.bind(ok, text="Speichern")
         ok.clicked.connect(self._on_ok)
         btns.addWidget(ok)
-        cancel = QPushButton("Abbrechen")
+        cancel = QPushButton()
+        i18n.bind(cancel, text="Abbrechen")
         cancel.clicked.connect(self.reject)
         btns.addWidget(cancel)
         root.addLayout(btns)
 
         self._reload_profile_combo()
         self._load_form(self.current)
+        i18n.watch(self)
+
+    def _build_language_box(self) -> QGroupBox:
+        box = QGroupBox()
+        i18n.bind(box, title="Oberfläche")
+        row = QHBoxLayout(box)
+        self.ui_language = ComboBox()
+        i18n.bind_items(self.ui_language, [("Deutsch", "de"), ("English", "en")])
+        current = str(self.work.get("ui", {}).get("language", "de"))
+        index = max(0, self.ui_language.findData(current))
+        self.ui_language.setCurrentIndex(index)
+        self.ui_language.currentIndexChanged.connect(self._on_ui_language)
+        row.addWidget(self.ui_language, 1)
+        hint = i18n.lab(
+            "Deutsch oder English. Das Panel wechselt sofort, dieses Fenster ebenfalls.",
+            wrap=True,
+        )
+        row.addWidget(hint, 2)
+        return box
+
+    def _on_ui_language(self) -> None:
+        lang = str(self.ui_language.currentData() or "de")
+        self.work.setdefault("ui", {})["language"] = lang
+        i18n.set_language(lang)
+
+    def reject(self) -> None:  # noqa: N802
+        i18n.set_language(self._ui_lang_before)
+        super().reject()
 
     # -- Aufbau ------------------------------------------------------------
 
     def _build_vc_box(self) -> QGroupBox:
-        box = QGroupBox("VectorCraft (Steuerkanal)")
+        box = QGroupBox()
+        i18n.bind(box, title="VectorCraft (Steuerkanal)")
         form = QFormLayout(box)
         ctrl = self.work.get("control", {})
         self.vc_exe = QLineEdit(ctrl.get("vectorcraft_exe", ""))
-        self.vc_exe.setPlaceholderText("automatisch gesucht, falls leer")
+        i18n.bind(self.vc_exe, placeholder="automatisch gesucht, falls leer")
         row = QHBoxLayout()
         row.addWidget(self.vc_exe, 1)
         browse = QPushButton("...")
@@ -94,11 +128,12 @@ class SetupDialog(QDialog):
         self.vc_port = QSpinBox()
         self.vc_port.setRange(1, 65535)
         self.vc_port.setValue(int(ctrl.get("port", 7979)))
-        form.addRow("Steuerkanal-Port", self.vc_port)
+        form.addRow(i18n.lab("Steuerkanal-Port"), self.vc_port)
         return box
 
     def _build_profile_box(self) -> QGroupBox:
-        box = QGroupBox("Plotter-Profil")
+        box = QGroupBox()
+        i18n.bind(box, title="Plotter-Profil")
         lay = QHBoxLayout(box)
         self.profile_combo = ComboBox()
         self.profile_combo.currentTextChanged.connect(self._on_profile_selected)
@@ -108,33 +143,37 @@ class SetupDialog(QDialog):
             ("Umbenennen ...", self._rename_profile),
             ("Loeschen", self._delete_profile),
         ):
-            btn = QPushButton(text)
+            btn = QPushButton()
+            i18n.bind(btn, text=text)
             btn.clicked.connect(slot)
             lay.addWidget(btn)
         return box
 
     def _build_plotter_box(self) -> QGroupBox:
-        box = QGroupBox("Plotter")
+        box = QGroupBox()
+        i18n.bind(box, title="Plotter")
         form = QFormLayout(box)
         self.model = QLineEdit()
-        form.addRow("Modell", self.model)
+        form.addRow(i18n.lab("Modell"), self.model)
         self.language = ComboBox()
-        self.language.addItem("MGL-IIc (Mimaki)", "mgl2")
-        self.language.addItem("HP-GL (z. B. Vevor)", "hpgl")
-        form.addRow("Sprache", self.language)
+        i18n.bind_items(
+            self.language,
+            [("MGL-IIc (Mimaki)", "mgl2"), ("HP-GL (z. B. Vevor)", "hpgl")],
+        )
+        form.addRow(i18n.lab("Befehlssprache"), self.language)
         self.sheet_width = QDoubleSpinBox()
         self.sheet_width.setRange(10.0, 5000.0)
-        form.addRow("Folienbreite (mm)", self.sheet_width)
+        form.addRow(i18n.lab("Folienbreite (mm)"), self.sheet_width)
         return box
 
     def _build_connection_box(self) -> QGroupBox:
-        box = QGroupBox("Verbindung")
+        box = QGroupBox()
+        i18n.bind(box, title="Verbindung")
         lay = QVBoxLayout(box)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Art"))
+        row.addWidget(i18n.lab("Art"))
         self.kind = ComboBox()
-        for key, label in TRANSPORT_KINDS:
-            self.kind.addItem(label, key)
+        i18n.bind_items(self.kind, [(label, key) for key, label in TRANSPORT_KINDS])
         self.kind.currentIndexChanged.connect(lambda i: self.stack.setCurrentIndex(i))
         row.addWidget(self.kind, 1)
         lay.addLayout(row)
@@ -147,7 +186,8 @@ class SetupDialog(QDialog):
         self.stack.addWidget(self._build_mimaki_usb_page())
         lay.addWidget(self.stack)
 
-        test_btn = QPushButton("Verbindung testen")
+        test_btn = QPushButton()
+        i18n.bind(test_btn, text="Verbindung testen")
         test_btn.clicked.connect(self._on_test)
         lay.addWidget(test_btn)
         return box
@@ -156,90 +196,97 @@ class SetupDialog(QDialog):
         w = QWidget()
         form = QFormLayout(w)
         self.loki_host = QLineEdit()
-        form.addRow("Loki-Server (IP)", self.loki_host)
+        form.addRow(i18n.lab("Loki-Server (IP)"), self.loki_host)
         self.loki_port = QSpinBox()
         self.loki_port.setRange(1, 65535)
-        form.addRow("Port", self.loki_port)
+        form.addRow(i18n.lab("Port"), self.loki_port)
         dev_row = QHBoxLayout()
         self.loki_device = ComboBox()
         self.loki_device.setEditable(True)
         dev_row.addWidget(self.loki_device, 1)
-        fetch = QPushButton("Geraete laden")
+        fetch = QPushButton()
+        i18n.bind(fetch, text="Geraete laden")
         fetch.clicked.connect(self._fetch_loki_devices)
         dev_row.addWidget(fetch)
         wrap = QWidget()
         wrap.setLayout(dev_row)
-        form.addRow("Geraet", wrap)
+        form.addRow(i18n.lab("Geraet"), wrap)
         return w
 
     def _build_tcp_page(self) -> QWidget:
         w = QWidget()
         form = QFormLayout(w)
         self.tcp_host = QLineEdit()
-        form.addRow("Host", self.tcp_host)
+        form.addRow(i18n.lab("Host"), self.tcp_host)
         self.tcp_port = QSpinBox()
         self.tcp_port.setRange(1, 65535)
-        form.addRow("Port", self.tcp_port)
+        form.addRow(i18n.lab("Port"), self.tcp_port)
         return w
 
     def _build_serial_page(self) -> QWidget:
         w = QWidget()
         form = QFormLayout(w)
         self.serial_port = QLineEdit()
-        self.serial_port.setPlaceholderText("z. B. COM5 oder auto")
-        self.serial_port.setToolTip("auto = CH340-Plotter (z. B. Vevor) selbst finden, auch per Loki-Client angehaengt")
-        form.addRow("COM-Port", self.serial_port)
+        i18n.bind(
+            self.serial_port,
+            placeholder="z. B. COM5 oder auto",
+            tip="auto = CH340-Plotter (z. B. Vevor) selbst finden, direkt am PC oder per Loki-Client",
+        )
+        form.addRow(i18n.lab("COM-Port"), self.serial_port)
         self.baud = QSpinBox()
         self.baud.setRange(300, 921600)
-        form.addRow("Baudrate", self.baud)
+        form.addRow(i18n.lab("Baudrate"), self.baud)
         return w
 
     def _build_file_page(self) -> QWidget:
         w = QWidget()
         form = QFormLayout(w)
         self.file_path = QLineEdit()
-        form.addRow("Dateipfad", self.file_path)
+        form.addRow(i18n.lab("Dateipfad"), self.file_path)
         return w
 
     def _build_mimaki_usb_page(self) -> QWidget:
         w = QWidget()
         form = QFormLayout(w)
-        hint = QLabel(
-            "Schreibt wie FineCut an den Mimaki-USB-Treiber. Funktioniert, wenn der "
-            "Loki-Client den Cutter per USB/IP an diesen PC haengt."
-        )
-        hint.setWordWrap(True)
-        form.addRow(hint)
+        form.addRow(i18n.lab(
+            "Schreibt wie FineCut an den Mimaki-USB-Treiber. Der Cutter kann direkt an diesem PC stecken "
+            "oder vom Loki-Client per USB/IP angehängt sein. Leer lassen sucht den Treiber selbst.",
+            wrap=True,
+        ))
         self.usb_path = QLineEdit()
-        self.usb_path.setPlaceholderText("leer = automatisch finden")
-        form.addRow("Geraetepfad", self.usb_path)
+        i18n.bind(self.usb_path, placeholder="leer = automatisch finden")
+        form.addRow(i18n.lab("Geraetepfad"), self.usb_path)
         return w
 
     def _build_condition_box(self) -> QGroupBox:
-        box = QGroupBox("Standard-Schneidbedingung")
+        box = QGroupBox()
+        i18n.bind(box, title="Standard-Schneidbedingung")
         form = QFormLayout(box)
         self.speed = QSpinBox()
         self.speed.setRange(1, 100)
-        form.addRow("Geschwindigkeit (cm/s)", self.speed)
+        form.addRow(i18n.lab("Geschwindigkeit (cm/s)"), self.speed)
         self.pressure = QSpinBox()
         self.pressure.setRange(10, 500)
-        form.addRow("Druck (g)", self.pressure)
+        form.addRow(i18n.lab("Druck (g)"), self.pressure)
         self.offset = QDoubleSpinBox()
         self.offset.setRange(0.0, 2.0)
         self.offset.setSingleStep(0.05)
-        form.addRow("Klingenoffset (mm)", self.offset)
+        form.addRow(i18n.lab("Klingenoffset (mm)"), self.offset)
         return box
 
     def _build_favorites_box(self) -> QGroupBox:
-        box = QGroupBox("Favoriten (Schneidbedingungen)")
+        box = QGroupBox()
+        i18n.bind(box, title="Favoriten (Schneidbedingungen)")
         lay = QHBoxLayout(box)
         self.fav_combo = ComboBox()
         self._reload_favorites()
         lay.addWidget(self.fav_combo, 1)
-        load_btn = QPushButton("Laden")
+        load_btn = QPushButton()
+        i18n.bind(load_btn, text="Laden")
         load_btn.clicked.connect(self._load_favorite)
         lay.addWidget(load_btn)
-        save_btn = QPushButton("Speichern als ...")
+        save_btn = QPushButton()
+        i18n.bind(save_btn, text="Speichern als ...")
         save_btn.clicked.connect(self._save_favorite)
         lay.addWidget(save_btn)
         return box
@@ -325,12 +372,12 @@ class SetupDialog(QDialog):
         self._load_form(name)
 
     def _new_profile(self) -> None:
-        name, ok = QInputDialog.getText(self, "Neuer Plotter", "Name des Plotters:")
+        name, ok = QInputDialog.getText(self, i18n.tr("Neuer Plotter"), i18n.tr("Name des Plotters:"))
         name = name.strip()
         if not ok or not name:
             return
         if name in self.work["profiles"]:
-            warning(self, "Neuer Plotter", f"'{name}' gibt es schon.")
+            warning(self, "Neuer Plotter", i18n.trf("'{name}' gibt es schon.", name=name))
             return
         self._store_form(self.current)
         settings_mod.new_profile(self.work, name, copy_from=self.current)
@@ -339,13 +386,13 @@ class SetupDialog(QDialog):
         self._load_form(name)
 
     def _rename_profile(self) -> None:
-        new, ok = QInputDialog.getText(self, "Umbenennen", "Neuer Name:", text=self.current)
+        new, ok = QInputDialog.getText(self, i18n.tr("Umbenennen"), i18n.tr("Neuer Name:"), text=self.current)
         new = new.strip()
         if not ok or not new or new == self.current:
             return
         self._store_form(self.current)
         if not settings_mod.rename_profile(self.work, self.current, new):
-            warning(self, "Umbenennen", f"'{new}' ist schon vergeben.")
+            warning(self, "Umbenennen", i18n.trf("'{name}' ist schon vergeben.", name=new))
             return
         self.current = new
         self._reload_profile_combo()
@@ -354,7 +401,7 @@ class SetupDialog(QDialog):
         if len(self.work["profiles"]) <= 1:
             information(self, "Loeschen", "Mindestens ein Plotter muss bleiben.")
             return
-        if not question(self, "Loeschen", f"Plotter '{self.current}' loeschen?"):
+        if not question(self, "Loeschen", i18n.trf("Plotter '{name}' löschen?", name=self.current)):
             return
         settings_mod.delete_profile(self.work, self.current)
         self.current = self.work["active_profile"]
@@ -365,7 +412,7 @@ class SetupDialog(QDialog):
 
     def _browse_vc_exe(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "vectorcraft.exe waehlen", "C:\\Program Files\\VectorCraft", "Programme (*.exe)"
+            self, i18n.tr("vectorcraft.exe wählen"), "C:\\Program Files\\VectorCraft", i18n.tr("Programme (*.exe)")
         )
         if path:
             self.vc_exe.setText(path)
@@ -380,17 +427,17 @@ class SetupDialog(QDialog):
         current = self.loki_device.currentData() or self.loki_device.currentText()
         self.loki_device.clear()
         for dev in devices:
-            label = f"{dev.name} ({dev.id})" + ("" if dev.available else " - belegt")
+            label = f"{dev.name} ({dev.id})" + ("" if dev.available else i18n.tr(" - belegt"))
             self.loki_device.addItem(label, dev.id)
         idx = self.loki_device.findData(current)
         if idx >= 0:
             self.loki_device.setCurrentIndex(idx)
         if not devices:
-            information(self, "Loki", "Loki meldet keine Plotter.")
+            information(self, "Loki", i18n.tr("Loki meldet keine Plotter."))
 
     def _on_test(self) -> None:
         ok, msg = build_transport(self._collect_transport()).test()
-        (information if ok else warning)(self, "Verbindung", msg)
+        (information if ok else warning)(self, "Verbindung", i18n.tr(msg))
 
     def _reload_favorites(self) -> None:
         self.fav_combo.clear()
@@ -405,7 +452,7 @@ class SetupDialog(QDialog):
         self.offset.setValue(float(fav.get("offset", 0.3)))
 
     def _save_favorite(self) -> None:
-        name, ok = QInputDialog.getText(self, "Favorit speichern", "Name:")
+        name, ok = QInputDialog.getText(self, i18n.tr("Favorit speichern"), i18n.tr("Name:"))
         name = name.strip()
         if not ok or not name:
             return

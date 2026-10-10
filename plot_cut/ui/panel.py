@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import i18n
 from . import icons
 from .style import ComboBox
 
@@ -42,6 +43,8 @@ class Panel(QWidget):
 
         self._build_ui()
         self.setFixedWidth(292)
+        self._status_source = ("Bereit", {})
+        i18n.watch(self)
 
     # -- Aufbau ------------------------------------------------------------
 
@@ -60,11 +63,12 @@ class Panel(QWidget):
         row.setObjectName("Body")
         lay = QHBoxLayout(row)
         lay.setContentsMargins(10, 8, 10, 0)
-        label = QLabel("Plotter")
+        label = QLabel()
+        i18n.bind(label, text="Plotter")
         label.setObjectName("Status")
         lay.addWidget(label)
         self.profile_combo = ComboBox()
-        self.profile_combo.setToolTip("Aktiven Plotter waehlen")
+        i18n.bind(self.profile_combo, tip="Aktiven Plotter wählen")
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
         lay.addWidget(self.profile_combo, 1)
         self.reload_profiles()
@@ -101,14 +105,14 @@ class Panel(QWidget):
 
         info_btn = QToolButton()
         info_btn.setIcon(icons.icon_info())
-        info_btn.setToolTip("Info / Verbindung")
+        i18n.bind(info_btn, tip="Info / Verbindung")
         info_btn.clicked.connect(self.controller.show_info)
         lay.addWidget(info_btn)
 
         close_btn = QToolButton()
         close_btn.setText("x")
         close_btn.setObjectName("CloseBtn")
-        close_btn.setToolTip("Panel schliessen")
+        i18n.bind(close_btn, tip="Panel schliessen")
         close_btn.clicked.connect(self.hide)
         lay.addWidget(close_btn)
 
@@ -126,7 +130,7 @@ class Panel(QWidget):
             ("Plot", icons.icon_plot(), "Auswahl schneiden (Plot)", self.controller.on_plot, True),
             ("Setup", icons.icon_setup(), "Plotter/User Setup", self.controller.on_setup, True),
             ("Test", icons.icon_test(), "Verbindung testen", self.controller.on_test_connection, True),
-            ("Kontur", icons.icon_generic("K"), "Kontur/Offset (folgt in Phase 2)", None, False),
+            ("Kontur", icons.icon_generic("K"), "Äußerste Kante der Kontur als Schnittlinie", self.controller.on_contour, True),
             ("Entgittern", icons.icon_generic("E"), "Entgitterlinien (folgt)", None, False),
             ("Cut-Ebene", icons.icon_generic("C"), "Auf Cut-Ebene verschieben (folgt)", None, False),
             ("Marken", icons.icon_generic("M"), "Passermarken (folgt)", None, False),
@@ -145,13 +149,16 @@ class Panel(QWidget):
         bar.setObjectName("StatusBar")
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(8, 3, 8, 3)
-        self.status_label = QLabel("Bereit")
+        self.status_label = QLabel()
         self.status_label.setObjectName("Status")
         lay.addWidget(self.status_label)
+        self.set_status("Bereit")
         return bar
 
-    def set_status(self, text: str) -> None:
-        self.status_label.setText(text)
+    def set_status(self, text: str, **fmt: object) -> None:
+        self._status_source = (text, fmt)
+        self.status_label._i18n_status = (text, fmt)  # noqa: SLF001
+        self.status_label.setText(i18n.trf(text, **fmt))
 
     # -- Fenster verschieben (rahmenlos) -----------------------------------
 
@@ -175,7 +182,7 @@ def _tile(label: str, icon, tip: str, handler, enabled: bool) -> QPushButton:
     btn = QPushButton()
     btn.setObjectName("Tile")
     btn.setFixedSize(86, 68)
-    btn.setToolTip(tip)
+    i18n.bind(btn, tip=tip)
     btn.setEnabled(enabled)
     btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
     lay = QVBoxLayout(btn)
@@ -186,7 +193,8 @@ def _tile(label: str, icon, tip: str, handler, enabled: bool) -> QPushButton:
     pic.setPixmap(icon.pixmap(22, 22))
     pic.setAlignment(Qt.AlignCenter)
     pic.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-    text = QLabel(label)
+    text = QLabel()
+    i18n.bind(text, text=label)
     text.setObjectName("TileText")
     text.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
     text.setAttribute(Qt.WA_TransparentForMouseEvents, True)

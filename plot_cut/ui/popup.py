@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..i18n import tr
+
 _STYLE = """
 QDialog { background: #f4f4f4; }
 QLabel { color: #111111; background: transparent; }
@@ -40,7 +42,7 @@ def _show(
     default: int,
 ) -> int:
     dlg = QDialog(parent)
-    dlg.setWindowTitle(title)
+    dlg.setWindowTitle(tr(title))
     dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     dlg.setModal(True)
     dlg.setStyleSheet(_STYLE)
@@ -56,7 +58,7 @@ def _show(
 
     col = QVBoxLayout()
     col.setSpacing(14)
-    label = QLabel(text)
+    label = QLabel(tr(text))
     label.setWordWrap(True)
     label.setFixedWidth(460)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -71,7 +73,7 @@ def _show(
         dlg.done(code)
 
     for caption, code in buttons:
-        btn = QPushButton(caption)
+        btn = QPushButton(tr(caption))
         btn.clicked.connect(lambda _checked=False, code=code: choose(code))
         if code == default:
             btn.setDefault(True)

@@ -127,6 +127,13 @@ class VcControlClient:
                         names.add(name)
         return names
 
+    def execute(self, command: str, params: dict[str, Any] | None = None) -> Any:
+        """Fuehrt ein Engine-Kommando aus (z. B. ``type.createOutlines``)."""
+        body: dict[str, Any] = {"command": command}
+        if params:
+            body["params"] = params
+        return self._request("engine.execute", body)
+
     def get_document_info(self) -> dict[str, Any]:
         """Dateipfad, Auswahlzaehler und Ebenen, so gut die Version es liefert."""
         info: dict[str, Any] = {"path": None, "selection_count": 0, "layers": []}
@@ -152,6 +159,23 @@ class VcControlClient:
         if isinstance(layers, list):
             info["layers"] = layers
         return info
+
+    def selection_ids(self) -> list[int]:
+        """Objekt-IDs der aktuellen Auswahl."""
+        try:
+            result = self._request("document.inspect", {"depth": 1})
+        except VcControlError:
+            return []
+        selection = result.get("selection") if isinstance(result, dict) else None
+        if not isinstance(selection, list):
+            return []
+        ids: list[int] = []
+        for item in selection:
+            if isinstance(item, int):
+                ids.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("id"), int):
+                ids.append(int(item["id"]))
+        return ids
 
     # -- auswahl exportieren ----------------------------------------------
 

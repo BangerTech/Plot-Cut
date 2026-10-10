@@ -1,6 +1,6 @@
 # Plot Cut
 
-![Plot Cut](assets/logo.png)
+<img src="assets/logo.png" alt="Plot Cut" width="48">
 
 A FineCut-style cutting panel for [VectorCraft](https://github.com/storytold/vectorcraft). It takes the current selection, shows a sheet preview, and sends MGL-IIc or HP-GL to a cutter.
 
@@ -63,7 +63,13 @@ Build the standalone program:
 
 Output: `dist\Plot Cut.exe`. The window and taskbar icon is `assets/logo.ico`.
 
+Publishing a GitHub release builds three archives and attaches them to that release: `Plot-Cut-windows.zip`, `Plot-Cut-macos.zip`, and `Plot-Cut-linux.zip`. Mimaki USB and the Vevor COM port are the Windows setup described above.
+
 ## What the windows do
+
+<img src="assets/panel.png" alt="Plot Cut panel" width="260">
+<img src="assets/plot.png" alt="Plot window" width="640">
+
 
 **Plot** (right-hand bar, FineCut layout): sheet size, offset, size and scale, copies on X and Y, frame, rotate, move, fit, mirror. The **Farbe** tab turns colors on or off.
 

@@ -1,8 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports = []
 hiddenimports += collect_submodules('plot_cut')
+
+# .ico is the Windows icon. macOS wants .icns; Linux ignores the icon.
+icon = 'assets/logo.ico' if sys.platform == 'win32' else None
 
 
 a = Analysis(
@@ -34,10 +39,19 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon='assets/logo.ico',
+    icon=icon,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
 )
+
+# macOS startet Qt zuverlaessig aus einem App-Bundle.
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='Plot Cut.app',
+        icon=None,
+        bundle_identifier='com.bangertech.plotcut',
+    )

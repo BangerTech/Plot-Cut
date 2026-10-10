@@ -2,15 +2,91 @@
 
 from __future__ import annotations
 
+import math
+import re
 import time
+import xml.etree.ElementTree as ET
 
 from .ui import popup
 
 from . import geometry as g
+from . import i18n
 from . import settings as settings_mod
 from . import vc_launcher
 from .mgl import CutCondition
 from .vc_control import VcControlClient, VcControlError
+
+
+def _svg_has_text(data: bytes) -> bool:
+    return b"<text" in data.lower()
+
+
+def _transform_scale(transform: str | None) -> tuple[float, float]:
+    """Skalierung aus einem SVG-transform. Stroke-Breite wird damit mitvergroessert."""
+    if not transform:
+        return 1.0, 1.0
+    sx = sy = 1.0
+    for a, b, c, d in re.findall(
+        r"matrix\(\s*([-\d.eE]+)[\s,]+([-\d.eE]+)[\s,]+([-\d.eE]+)[\s,]+([-\d.eE]+)",
+        transform,
+    ):
+        sx *= math.hypot(float(a), float(b))
+        sy *= math.hypot(float(c), float(d))
+    for match in re.finditer(r"scale\(\s*([-\d.eE]+)(?:[\s,]+([-\d.eE]+))?", transform):
+        x = abs(float(match.group(1)))
+        y = abs(float(match.group(2) or match.group(1)))
+        sx *= x
+        sy *= y
+    return sx, sy
+
+
+def _length_pt(value: str | None) -> float:
+    if not value:
+        return 0.0
+    match = re.match(r"\s*([-\d.eE]+)", value)
+    return float(match.group(1)) if match else 0.0
+
+
+def _outward_stroke_pt(data: bytes, align: str) -> float:
+    """Wie weit die aeusserste Kante ausserhalb des Pfads liegt, in Dokument-Punkten.
+
+    Ein Strich in VectorCraft macht den Buchstaben breiter. ``center`` zaehlt halb,
+    ``outside`` ganz, ``inside`` gar nicht, weil die Aussenkante dann der Pfad selbst ist.
+    Die SVG-Breite steht vor der Text-Skalierung, darum wird die Matrix mitgerechnet.
+    """
+    if align == "inside":
+        return 0.0
+    try:
+        root = ET.fromstring(data.decode("utf-8", errors="replace"))
+    except ET.ParseError:
+        return 0.0
+    parent = {child: el for el in root.iter() for child in list(el)}
+    best = 0.0
+    for el in root.iter():
+        width = _length_pt(el.get("stroke-width"))
+        style = el.get("style") or ""
+        if width <= 0 and "stroke-width" in style:
+            found = re.search(r"stroke-width\s*:\s*([^;]+)", style)
+            width = _length_pt(found.group(1) if found else None)
+        if width <= 0:
+            continue
+        stroke = (el.get("stroke") or "").strip().lower()
+        if not stroke and "stroke" in style:
+            found = re.search(r"(?:^|;)\s*stroke\s*:\s*([^;]+)", style)
+            stroke = (found.group(1) if found else "").strip().lower()
+        if stroke in ("", "none", "transparent"):
+            continue
+        sx, sy = 1.0, 1.0
+        cur: ET.Element | None = el
+        while cur is not None:
+            lsx, lsy = _transform_scale(cur.get("transform"))
+            sx *= lsx
+            sy *= lsy
+            cur = parent.get(cur)
+        best = max(best, width * (abs(sx) + abs(sy)) / 2.0)
+    if align == "outside":
+        return best
+    return best * 0.5
 
 
 class AppController:
@@ -22,6 +98,7 @@ class AppController:
         self.vc = VcControlClient(
             host=ctrl.get("host", "127.0.0.1"), port=int(ctrl.get("port", 7979))
         )
+        i18n.set_language(str(self.settings.get("ui", {}).get("language", "de")))
         self.panel = None  # wird von main gesetzt
 
     # -- Persistenz --------------------------------------------------------
@@ -46,7 +123,7 @@ class AppController:
         if name in self.settings["profiles"] and name != self.settings.get("active_profile"):
             self.settings["active_profile"] = name
             self.save()
-            self._status(f"Plotter: {name}")
+            self._status("Plotter: {name}", name=name)
 
     def conditions_by_color(self) -> dict[str, CutCondition]:
         return settings_mod.conditions_by_color(self.profile)
@@ -79,9 +156,9 @@ class AppController:
 
     # -- Statusanzeige -----------------------------------------------------
 
-    def _status(self, text: str) -> None:
+    def _status(self, text: str, **fmt: object) -> None:
         if self.panel is not None:
-            self.panel.set_status(text)
+            self.panel.set_status(text, **fmt)
 
     # -- VectorCraft-Steuerkanal sicherstellen -----------------------------
 
@@ -107,11 +184,11 @@ class AppController:
                 popup.warning(
                     self.panel,
                     "Steuerkanal nicht aktiv",
-                    "VectorCraft wurde nicht gefunden. Bitte einmal im Setup den "
-                    "Pfad zu vectorcraft.exe angeben.\n\n"
-                    "Der Steuerkanal (Port "
-                    f"{self.vc.port}) muss aktiv sein, damit die Auswahl geholt "
-                    "werden kann.",
+                    i18n.trf(
+                        "VectorCraft wurde nicht gefunden. Bitte einmal im Setup den Pfad zu vectorcraft.exe angeben.\n\n"
+                        "Der Steuerkanal (Port {port}) ist nötig, damit die Auswahl gelesen werden kann.",
+                        port=self.vc.port,
+                    ),
                 )
             return False
 
@@ -120,11 +197,9 @@ class AppController:
                 self.panel,
                 "VectorCraft neu starten?",
                 "Der VectorCraft-Steuerkanal ist nicht aktiv.\n\n"
-                "Damit das Panel die Auswahl holen kann, muss VectorCraft mit "
-                "aktivem Steuerkanal laufen.\n\n"
+                "Damit das Panel die Auswahl holen kann, muss VectorCraft mit aktivem Steuerkanal laufen.\n\n"
                 "Jetzt VectorCraft mit Steuerkanal starten?\n"
-                "(Bitte vorher ungespeicherte Arbeit in einem evtl. offenen "
-                "VectorCraft sichern.)",
+                "(Eine offene Zeichnung vorher in VectorCraft sichern.)",
             )
             if not start:
                 return False
@@ -132,7 +207,9 @@ class AppController:
         self._status("Starte VectorCraft ...")
         if not vc_launcher.launch_with_control(exe, self.vc.port):
             popup.critical(
-                self.panel, "Start fehlgeschlagen", f"VectorCraft ({exe}) ließ sich nicht starten."
+                self.panel,
+                "Start fehlgeschlagen",
+                i18n.trf("VectorCraft ({exe}) ließ sich nicht starten.", exe=exe),
             )
             return False
 
@@ -160,9 +237,12 @@ class AppController:
             popup.warning(
                 self.panel,
                 "Keine Auswahl",
-                "Die Auswahl konnte nicht geholt werden.\n\n"
-                f"{exc}\n\nLaeuft VectorCraft mit '--control "
-                f"{self.vc.port}' und ist etwas ausgewaehlt?",
+                i18n.trf(
+                    "Die Auswahl konnte nicht geholt werden.\n\n{exc}\n\n"
+                    "Läuft VectorCraft mit '--control {port}' und ist etwas ausgewählt?",
+                    exc=exc,
+                    port=self.vc.port,
+                ),
             )
             return
 
@@ -179,14 +259,23 @@ class AppController:
 
         if not polylines:
             self._status("Keine Pfade")
-            popup.information(
-                self.panel,
-                "Keine Schneidepfade",
-                "In der Auswahl wurden keine Linien/Pfade gefunden.",
-            )
+            if _svg_has_text(selection.data):
+                popup.information(
+                    self.panel,
+                    "Text statt Kontur",
+                    "Die Auswahl ist Text, zum Beispiel ein Buchstabe.\n\n"
+                    "Kontur wandelt ihn in eine Schnittlinie um, so wie FineCut. "
+                    "Danach kann er geschnitten werden.",
+                )
+            else:
+                popup.information(
+                    self.panel,
+                    "Keine Schneidepfade",
+                    "In der Auswahl wurden keine Linien/Pfade gefunden.",
+                )
             return
 
-        self._status(f"{len(polylines)} Pfade geladen")
+        self._status("{n} Pfade geladen", n=len(polylines))
         from .ui.plot_dialog import PlotDialog
 
         if self.panel is not None:
@@ -195,11 +284,139 @@ class AppController:
             dlg = PlotDialog(self, polylines, selection.document_path)
             dlg.exec()
         except Exception as exc:
-            popup.critical(self.panel, "Plot", f"Das Plot-Fenster konnte nicht geoeffnet werden:\n{exc}")
+            popup.critical(
+                self.panel,
+                "Plot",
+                i18n.trf("Das Plot-Fenster konnte nicht geoeffnet werden:\n{exc}", exc=exc),
+            )
         finally:
             if self.panel is not None:
                 self.panel.show()
         self._status("Bereit")
+
+    def on_contour(self) -> None:
+        """Aeussere Kante der VectorCraft-Kontur wird zur einzigen Schnittlinie.
+
+        Text wird zuerst in Pfade gewandelt. Ein Strich, der den Buchstaben
+        breiter macht, wird durch seine aeusserste Kante ersetzt. Das Loch
+        im Buchstaben bleibt. Ohne Strich bleibt die Glyphe samt Loch. Das
+        Schneidefenster oeffnet sich hier nicht.
+        """
+        if not self.ensure_control_channel():
+            self._status("Steuerkanal nicht aktiv")
+            return
+        self._status("Kontur ...")
+        try:
+            selection = self.vc.export_selection()
+        except VcControlError as exc:
+            self._status("Fehler")
+            popup.warning(
+                self.panel,
+                "Keine Auswahl",
+                i18n.trf("Die Auswahl konnte nicht geholt werden.\n\n{exc}", exc=exc),
+            )
+            return
+
+        lower = selection.data.lower()
+        has_text = b"<text" in lower
+        has_path = b"<path" in lower or b"<polygon" in lower or b"<polyline" in lower
+        if selection.count == 0 and not has_text and not has_path:
+            self._status("Nichts ausgewaehlt")
+            popup.warning(
+                self.panel,
+                "Kontur",
+                "Bitte zuerst das Motiv in VectorCraft auswählen.\n\nOhne Auswahl wird nichts umgewandelt.",
+            )
+            return
+
+        align, fill = self._selection_paint()
+        outward = _outward_stroke_pt(selection.data, align)
+        steps = 0
+        try:
+            if has_text:
+                self.vc.execute("type.createOutlines")
+                steps += 1
+            if outward > 0.2:
+                steps += self._keep_outer_edge(outward, fill)
+            elif not has_text:
+                self._status("Kein Strich auf der Auswahl")
+                popup.information(
+                    self.panel,
+                    "Kontur",
+                    "Die Auswahl hat keinen Strich, der sie größer macht.\n\n"
+                    "In VectorCraft einen Strich auf das Motiv legen und dann noch einmal Kontur klicken. "
+                    "Übernommen wird nur die äußerste Kante.",
+                )
+                return
+        except VcControlError as exc:
+            self._undo(steps)
+            self._status("Kontur fehlgeschlagen")
+            popup.critical(
+                self.panel,
+                "Kontur",
+                i18n.trf(
+                    "Die äußerste Kante konnte nicht übernommen werden.\n\n{exc}\n\n"
+                    "Ist in VectorCraft etwas ausgewählt?",
+                    exc=exc,
+                ),
+            )
+            return
+
+        if outward > 0.2:
+            self._status("Äußerste Kante übernommen – jetzt Plot klicken")
+        else:
+            self._status("Text in Kontur umgewandelt – jetzt Plot klicken")
+
+    def _selection_paint(self) -> tuple[str, str]:
+        """Strich-Ausrichtung und eine sichtbare Fuellfarbe der Auswahl."""
+        align = "center"
+        fill = "#111111"
+        for pid in self.vc.selection_ids():
+            node = self.vc.execute("document.node", {"id": pid, "summary": True}) or {}
+            if not isinstance(node, dict):
+                continue
+            opts = node.get("strokeOptions") or {}
+            if isinstance(opts, dict) and opts.get("align"):
+                align = str(opts["align"])
+            color = node.get("fill")
+            if isinstance(color, str) and color.lower() not in ("", "none"):
+                fill = color
+        return align, fill
+
+    def _keep_outer_edge(self, outward_pt: float, fill: str) -> int:
+        """Ersetzt die Auswahl durch die aeusserste Kante des Strichs.
+
+        Der versetzte Pfad behaelt das Loch im Buchstaben. Weg fallen nur die
+        alten Pfade und der Strich. Gibt die Undo-Schritte zurueck.
+        """
+        steps = 0
+        originals = self.vc.selection_ids()
+        created = self.vc.execute(
+            "object.path.offsetPath",
+            {"offset": outward_pt, "joins": "round"},
+        )
+        steps += 1
+        new_ids = [int(i) for i in ((created or {}).get("ids") or [])]
+        if not new_ids:
+            raise VcControlError("Aus dem Strich wurde keine Aussenkante.")
+
+        remove = [i for i in originals if i not in new_ids]
+        if remove:
+            self.vc.execute("edit.clear", {"ids": remove})
+            steps += 1
+        self.vc.execute("select.set", {"ids": new_ids})
+        self.vc.execute("paint.setFill", {"color": fill, "ids": new_ids, "keepModel": True})
+        steps += 1
+        self.vc.execute("paint.setStroke", {"none": True, "ids": new_ids})
+        steps += 1
+        return steps
+
+    def _undo(self, steps: int) -> None:
+        for _ in range(max(0, steps)):
+            try:
+                self.vc.execute("edit.undo")
+            except VcControlError:
+                break
 
     def on_setup(self) -> None:
         from .ui.setup_dialog import SetupDialog
@@ -213,7 +430,7 @@ class AppController:
         )
         if self.panel is not None:
             self.panel.reload_profiles()
-        self._status(f"Plotter: {self.profile_name}")
+        self._status("Plotter: {name}", name=self.profile_name)
 
     def on_test_connection(self) -> None:
         from .transport import build_transport
@@ -224,9 +441,18 @@ class AppController:
         tr_ok, tr_msg = transport.test()
 
         lines = [
-            f"VectorCraft-Steuerkanal ({self.vc.host}:{self.vc.port}): "
-            + ("OK" if vc_ok else "nicht erreichbar"),
-            f"{self.profile_name} ({transport.describe()}): " + ("OK" if tr_ok else "Fehler"),
+            i18n.trf(
+                "VectorCraft-Steuerkanal ({host}:{port}): {state}",
+                host=self.vc.host,
+                port=self.vc.port,
+                state=i18n.tr("OK" if vc_ok else "nicht erreichbar"),
+            ),
+            i18n.trf(
+                "{name} ({where}): {state}",
+                name=self.profile_name,
+                where=transport.describe(),
+                state=i18n.tr("OK" if tr_ok else "Fehler"),
+            ),
             tr_msg,
         ]
         popup.information(self.panel, "Verbindungstest", "\n".join(lines))
@@ -238,8 +464,11 @@ class AppController:
         popup.information(
             self.panel,
             "Plot Cut",
-            f"Plot Cut v{__version__}\n\n"
-            "Schneide-Panel fuer VectorCraft, steuert mehrere Plotter\n"
-            "(z. B. Mimaki, Vevor) ueber den Loki-PrintServer.\n\n"
-            "FineCut ist eine Marke von Mimaki; dieses Projekt ist unabhaengig.",
+            i18n.trf(
+                "Plot Cut v{version}\n\n"
+                "Schneide-Panel für VectorCraft. Es steuert Plotter wie Mimaki und Vevor, "
+                "direkt per USB oder über den Loki-PrintServer.\n\n"
+                "FineCut ist eine Marke von Mimaki; dieses Projekt ist unabhängig.",
+                version=__version__,
+            ),
         )

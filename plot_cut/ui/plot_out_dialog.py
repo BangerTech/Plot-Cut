@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import geometry as g
+from .. import i18n
 from .. import mgl
 from ..transport import TransportError, build_transport
 from .popup import critical, information
@@ -69,7 +70,7 @@ class PlotOutDialog(QDialog):
         # Bereits gesetzter Offset darf in prepare_job nicht wieder auf 0 fallen.
         self.job_origin = "keep" if already_placed else origin
 
-        self.setWindowTitle(f"Ausplotten  —  {controller.profile_name}")
+        self.setWindowTitle(i18n.trf("Ausplotten — {name}", name=controller.profile_name))
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(FINECUT_STYLE + _OUT_STYLE)
         self.resize(920, 760)
@@ -100,7 +101,7 @@ class PlotOutDialog(QDialog):
             ("Save Preset Setting", self._save_preset, False),
         ]
         for text, handler, primary in buttons:
-            btn = QPushButton(text)
+            btn = QPushButton(i18n.tr(text))
             btn.setObjectName("Primary" if primary else "Side")
             btn.setMinimumWidth(190)
             btn.clicked.connect(handler)
@@ -116,16 +117,16 @@ class PlotOutDialog(QDialog):
     # -- Aufbau ------------------------------------------------------------
 
     def _build_plot_setting(self, d: dict) -> QGroupBox:
-        box = QGroupBox("Plot-Einstellung")
+        box = QGroupBox(i18n.tr("Plot-Einstellung"))
         grid = QGridLayout(box)
         grid.setContentsMargins(14, 16, 14, 14)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
         grid.setColumnMinimumWidth(1, 150)
 
-        self.src_plotter = QRadioButton("Plotter-Einstellung")
-        self.src_preset = QRadioButton("Auswahl-Einstellung")
-        self.src_custom = QRadioButton("Benutzerdefiniert")
+        self.src_plotter = QRadioButton(i18n.tr("Plotter-Einstellung"))
+        self.src_preset = QRadioButton(i18n.tr("Auswahl-Einstellung"))
+        self.src_custom = QRadioButton(i18n.tr("Benutzerdefiniert"))
         self.src_group = QButtonGroup(self)
         for i, rb in enumerate((self.src_plotter, self.src_preset, self.src_custom)):
             self.src_group.addButton(rb, i)
@@ -141,13 +142,13 @@ class PlotOutDialog(QDialog):
         self.preset_combo = ComboBox()
         self._reload_presets(d.get("preset", ""))
         grid.addWidget(self.preset_combo, 1, 1, 1, 2)
-        self.preset_edit = QPushButton("Bearbeiten...")
-        self.preset_edit.setToolTip("Presets im Setup verwalten")
+        self.preset_edit = QPushButton(i18n.tr("Bearbeiten..."))
+        self.preset_edit.setToolTip(i18n.tr("Presets im Setup verwalten"))
         self.preset_edit.clicked.connect(self._edit_presets)
         grid.addWidget(self.preset_edit, 1, 3)
 
         grid.addWidget(self.src_custom, 2, 0)
-        self.tool_label = QLabel("Werkzeug")
+        self.tool_label = i18n.lab("Werkzeug")
         grid.addWidget(self.tool_label, 3, 1)
         self.tool = ComboBox()
         for label, value in TOOLS:
@@ -155,15 +156,15 @@ class PlotOutDialog(QDialog):
         self.tool.setCurrentIndex(max(0, self.tool.findData(int(d.get("tool", 1)))))
         grid.addWidget(self.tool, 3, 2)
 
-        self.use_speed = QCheckBox("Geschwindigkeit")
+        self.use_speed = QCheckBox(i18n.tr("Geschwindigkeit"))
         self.speed = QSpinBox()
         self.speed.setRange(1, 100)
         self.speed.setValue(int(d.get("speed", 30)))
-        self.use_pressure = QCheckBox("Andruck")
+        self.use_pressure = QCheckBox(i18n.tr("Andruck"))
         self.pressure = QSpinBox()
         self.pressure.setRange(10, 500)
         self.pressure.setValue(int(d.get("pressure", 100)))
-        self.use_offset = QCheckBox("Offset")
+        self.use_offset = QCheckBox(i18n.tr("Offset"))
         self.offset = QDoubleSpinBox()
         self.offset.setRange(0.0, 2.0)
         self.offset.setSingleStep(0.05)
@@ -186,14 +187,14 @@ class PlotOutDialog(QDialog):
             grid.addWidget(unit_label, row, 3)
             self._custom_rows.append((check, spin, unit_label))
 
-        per_color = QGroupBox("Schneidbedingung je Farbe")
+        per_color = QGroupBox(i18n.tr("Schneidbedingung je Farbe"))
         pc = QGridLayout(per_color)
         pc.setContentsMargins(12, 14, 12, 10)
-        pc.addWidget(QLabel("Farbe"), 0, 0)
+        pc.addWidget(i18n.lab("Farbe"), 0, 0)
         self.color_combo = ComboBox()
         self.color_combo.currentIndexChanged.connect(self._show_color_condition)
         pc.addWidget(self.color_combo, 0, 1)
-        pc.addWidget(QLabel("Bedingung"), 1, 0)
+        pc.addWidget(i18n.lab("Bedingung"), 1, 0)
         self.color_condition = ComboBox()
         self.color_condition.activated.connect(self._store_color_condition)
         pc.addWidget(self.color_condition, 1, 1)
@@ -205,18 +206,18 @@ class PlotOutDialog(QDialog):
         return box
 
     def _build_options(self, d: dict) -> QGroupBox:
-        box = QGroupBox("Optionen")
+        box = QGroupBox(i18n.tr("Optionen"))
         grid = QGridLayout(box)
         grid.setContentsMargins(14, 16, 14, 14)
         grid.setHorizontalSpacing(24)
         grid.setVerticalSpacing(6)
 
-        self.sort = QCheckBox("Sortieren")
+        self.sort = QCheckBox(i18n.tr("Sortieren"))
         self.sort.setChecked(bool(d.get("sort", True)))
-        self.sort_all = QRadioButton("Alle")
-        self.sort_color = QRadioButton("Jede Farbe")
+        self.sort_all = QRadioButton(i18n.tr("Alle"))
+        self.sort_color = QRadioButton(i18n.tr("Jede Farbe"))
         (self.sort_color if d.get("sort_mode") == "color" else self.sort_all).setChecked(True)
-        self.inner_first = QCheckBox("Innen vor Außen")
+        self.inner_first = QCheckBox(i18n.tr("Innen vor Außen"))
         self.inner_first.setChecked(bool(d.get("inner_first", True)))
         self.sort.toggled.connect(self._update_enabled)
         for w in (self.sort, self.sort_all, self.sort_color, self.inner_first):
@@ -226,24 +227,26 @@ class PlotOutDialog(QDialog):
         grid.addWidget(_indent(self.sort_color), 2, 0)
         grid.addWidget(_indent(self.inner_first), 3, 0)
 
-        self.park = QCheckBox("Kopf in Parkposition")
-        self.park.setToolTip("Nach dem Schnitt fährt der Kopf hinter das Motiv, damit die Folie abgeschnitten werden kann.")
+        self.park = QCheckBox(i18n.tr("Kopf in Parkposition"))
+        self.park.setToolTip(i18n.tr(
+            "Nach dem Schnitt fährt der Kopf hinter das Motiv, damit die Folie abgeschnitten werden kann."
+        ))
         self.park.setChecked(bool(d.get("park", True)))
         self.park_gap = QDoubleSpinBox()
         self.park_gap.setRange(0.0, 1000.0)
         self.park_gap.setSuffix(" mm")
         self.park_gap.setValue(float(d.get("park_mm", 20.0)))
-        self.park_gap.setToolTip("Abstand hinter dem Motiv")
+        self.park_gap.setToolTip(i18n.tr("Abstand hinter dem Motiv"))
         self.park.toggled.connect(self._update_enabled)
         grid.addWidget(self.park, 4, 0)
         park_row = QHBoxLayout()
-        park_row.addWidget(QLabel("Abstand"))
+        park_row.addWidget(i18n.lab("Abstand"))
         park_row.addWidget(self.park_gap)
         park_row.addStretch(1)
         grid.addLayout(_indent_layout(park_row), 5, 0)
 
         overcut_row = QHBoxLayout()
-        overcut_row.addWidget(QLabel("Overcut"))
+        overcut_row.addWidget(i18n.lab("Overcut"))
         self.overcut = QDoubleSpinBox()
         self.overcut.setRange(0.0, 10.0)
         self.overcut.setSingleStep(0.1)
@@ -288,7 +291,7 @@ class PlotOutDialog(QDialog):
         self.preset_combo.clear()
         names = sorted(self._presets().keys())
         if not names:
-            self.preset_combo.addItem("(keine Presets gespeichert)", "")
+            self.preset_combo.addItem(i18n.tr("(keine Presets gespeichert)"), "")
         for name in names:
             self.preset_combo.addItem(name, name)
         if select:
@@ -319,10 +322,10 @@ class PlotOutDialog(QDialog):
 
     def _reload_color_conditions(self) -> None:
         self.color_condition.clear()
-        self.color_condition.addItem("Wie Plot-Einstellung", SAME_AS_ABOVE)
+        self.color_condition.addItem(i18n.tr("Wie Plot-Einstellung"), SAME_AS_ABOVE)
         for name in sorted(self._presets().keys()):
-            self.color_condition.addItem(f"Preset: {name}", name)
-        self.color_condition.addItem("Nicht schneiden", DO_NOT_CUT)
+            self.color_condition.addItem(i18n.trf("Preset: {name}", name=name), name)
+        self.color_condition.addItem(i18n.tr("Nicht schneiden"), DO_NOT_CUT)
         self._show_color_condition()
 
     def _show_color_condition(self, *_args) -> None:
@@ -391,9 +394,11 @@ class PlotOutDialog(QDialog):
         if not hasattr(self, "info"):
             return
         job = self._build_job()
-        self.info.setText(
-            f"Pfade: {len(job.polylines)}    Schnittlänge: {job.total_cut_mm / 10.0:.1f} cm"
-        )
+        self.info.setText(i18n.trf(
+            "Pfade: {n}    Schnittlänge: {cm} cm",
+            n=len(job.polylines),
+            cm=f"{job.total_cut_mm / 10.0:.1f}",
+        ))
 
     def _generate_bytes(self) -> bytes:
         job = self._build_job()
@@ -424,8 +429,8 @@ class PlotOutDialog(QDialog):
     def _save_preset(self) -> None:
         dlg = QInputDialog(self)
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowStaysOnTopHint)
-        dlg.setWindowTitle("Save Preset Setting")
-        dlg.setLabelText("Name für die aktuelle Schneidbedingung:")
+        dlg.setWindowTitle(i18n.tr("Save Preset Setting"))
+        dlg.setLabelText(i18n.tr("Name für die aktuelle Schneidbedingung:"))
         if dlg.exec() != QDialog.Accepted:
             return
         name = dlg.textValue().strip()
@@ -441,7 +446,7 @@ class PlotOutDialog(QDialog):
         self.controller.save()
         self._reload_presets(name)
         self._reload_color_conditions()
-        information(self, "Preset", f"Preset \"{name}\" gespeichert.")
+        information(self, "Preset", i18n.trf('Preset "{name}" gespeichert.', name=name))
 
     def _on_plot(self) -> None:
         self._persist_defaults()
@@ -452,13 +457,17 @@ class PlotOutDialog(QDialog):
         except TransportError as exc:
             critical(self, "Senden fehlgeschlagen", str(exc))
             return
-        information(self, "Schneiden", f"Gesendet an {transport.describe()} ({len(data)} Bytes).")
+        information(self, "Schneiden", i18n.trf(
+            "Gesendet an {where} ({n} Bytes).", where=transport.describe(), n=len(data)
+        ))
         self.accept()
 
     def _on_save_file(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
-        path, _ = QFileDialog.getSaveFileName(self, "Plotdatei speichern", "out.plt", "Plot (*.plt)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, i18n.tr("Plotdatei speichern"), "out.plt", i18n.tr("Plot (*.plt)")
+        )
         if not path:
             return
         self._persist_defaults()
@@ -469,7 +478,7 @@ class PlotOutDialog(QDialog):
         except OSError as exc:
             critical(self, "Fehler", str(exc))
             return
-        information(self, "Gespeichert", f"{len(data)} Bytes nach {path}.")
+        information(self, "Gespeichert", i18n.trf("{n} Bytes nach {path}.", n=len(data), path=path))
 
     def _persist_defaults(self) -> None:
         source = self._condition_source()
@@ -508,7 +517,7 @@ class CutPreviewDialog(QDialog):
         origin: str,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Vorschau")
+        self.setWindowTitle(i18n.tr("Vorschau"))
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         self.setStyleSheet(FINECUT_STYLE)
         self.resize(1100, 720)
@@ -520,21 +529,21 @@ class CutPreviewDialog(QDialog):
 
         side = QVBoxLayout()
         root.addLayout(side)
-        self.arrows = QCheckBox("Richtungspfeile")
-        self.order = QCheckBox("Reihenfolge-Nummern")
+        self.arrows = QCheckBox(i18n.tr("Richtungspfeile"))
+        self.order = QCheckBox(i18n.tr("Reihenfolge-Nummern"))
         self.order.setChecked(True)
-        self.travel = QCheckBox("Leerfahrten (gelb)")
+        self.travel = QCheckBox(i18n.tr("Leerfahrten (gelb)"))
         self.travel.setChecked(True)
         for w in (self.arrows, self.order, self.travel):
             w.toggled.connect(self._apply_options)
             side.addWidget(w)
-        legend = QLabel("schwarz = gegen Uhrzeigersinn\nrot = im Uhrzeigersinn\ngelb = Leerfahrt")
+        legend = i18n.lab("schwarz = gegen Uhrzeigersinn\nrot = im Uhrzeigersinn\ngelb = Leerfahrt")
         legend.setStyleSheet("color: #555555;")
         side.addWidget(legend)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
-        self.btn_sim = QPushButton("Simulation")
+        self.btn_sim = QPushButton(i18n.tr("Simulation"))
         self.btn_sim.setCheckable(True)
         self.btn_sim.toggled.connect(self._toggle_sim)
         side.addWidget(self.btn_sim)
@@ -544,9 +553,11 @@ class CutPreviewDialog(QDialog):
         self.slider.valueChanged.connect(lambda v: self.preview.set_sim_progress(v / 100.0))
         side.addWidget(self.slider)
         side.addLayout(view_buttons(self.preview))
-        side.addWidget(QLabel(f"Schnittlänge: {job.total_cut_mm / 10.0:.1f} cm"))
+        side.addWidget(QLabel(i18n.trf(
+            "Schnittlänge: {cm} cm", cm=f"{job.total_cut_mm / 10.0:.1f}"
+        )))
         side.addStretch(1)
-        close = QPushButton("Schließen")
+        close = QPushButton(i18n.tr("Schließen"))
         close.clicked.connect(self.accept)
         side.addWidget(close)
 

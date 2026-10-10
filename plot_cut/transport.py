@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from . import i18n
+
 LOKI_API_PREFIX = "/api/plotcut"
 
 
@@ -74,7 +76,7 @@ class LokiTransport:
 
     def send(self, data: bytes) -> None:
         if not self.device:
-            raise TransportError("Kein Loki-Geraet gewaehlt (Setup -> Verbindung -> Geraet).")
+            raise TransportError(i18n.tr("Kein Loki-Gerät gewählt (Setup -> Verbindung -> Gerät)."))
         dev = urllib.parse.quote(self.device, safe="")
         self._call("POST", f"/devices/{dev}/job", body=data)
 
@@ -85,17 +87,21 @@ class LokiTransport:
             return False, str(exc)
         if not self.device:
             names = ", ".join(d.id for d in devices) or "keine"
-            return False, f"Loki erreichbar, aber kein Geraet gewaehlt. Verfuegbar: {names}"
+            return False, i18n.trf(
+                "Loki erreichbar, aber kein Gerät gewählt. Verfügbar: {names}", names=names
+            )
         match = next((d for d in devices if d.id == self.device), None)
         if match is None:
-            return False, f"Loki kennt das Geraet '{self.device}' nicht."
+            return False, i18n.trf("Loki kennt das Gerät '{device}' nicht.", device=self.device)
         if not match.available:
-            who = f" (angehaengt an {match.attached_to})" if match.attached_to else ""
-            return False, f"'{match.name}' ist gerade belegt{who}."
-        return True, f"'{match.name}' ist bereit ({match.kind or 'Geraet'})."
+            who = i18n.trf(" (angehängt an {where})", where=match.attached_to) if match.attached_to else ""
+            return False, i18n.trf("'{name}' ist gerade belegt{who}.", name=match.name, who=who)
+        return True, i18n.trf(
+            "'{name}' ist bereit ({kind}).", name=match.name, kind=match.kind or i18n.tr("Gerät")
+        )
 
     def describe(self) -> str:
-        return f"Loki {self.host}:{self.port} / {self.device or '?'}"
+        return i18n.trf("Loki {host}:{port} / {device}", host=self.host, port=self.port, device=self.device or "?")
 
     def _call(self, method: str, path: str, body: bytes | None = None):
         req = urllib.request.Request(self.base_url + path, data=body, method=method)
@@ -105,11 +111,12 @@ class LokiTransport:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
-            raise TransportError(f"Loki: {_http_detail(exc)}") from exc
+            raise TransportError(i18n.trf("Loki: {detail}", detail=_http_detail(exc))) from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise TransportError(
-                f"Loki unter {self.host}:{self.port} nicht erreichbar: {exc}"
-            ) from exc
+            raise TransportError(i18n.trf(
+                "Loki unter {host}:{port} nicht erreichbar: {exc}",
+                host=self.host, port=self.port, exc=exc,
+            )) from exc
         if not raw:
             return {}
         try:
@@ -124,20 +131,21 @@ def _http_detail(exc: urllib.error.HTTPError) -> str:
     except Exception:
         detail = None
     messages = {
-        404: "Geraet oder Plot-Cut-API nicht gefunden (Loki aktualisiert?)",
-        409: "Geraet ist belegt (z. B. per USB/IP an einen PC angehaengt)",
-        503: "Geraet ist nicht angeschlossen",
+        404: i18n.tr("Gerät oder Plot-Cut-API nicht gefunden (Loki aktualisiert?)"),
+        409: i18n.tr("Gerät ist belegt (z. B. per USB/IP an einen PC angehängt)"),
+        503: i18n.tr("Gerät ist nicht angeschlossen"),
     }
     text = str(detail or messages.get(exc.code, f"HTTP {exc.code}"))
     low = text.lower()
     if "0a50" in low or "gerätedatei" in low or "geraetedatei" in low:
-        text += (
-            "\n\nDer Mimaki haengt bei Loki im USB/IP-Modus fuer FineCut. "
+        text += "\n\n" + i18n.tr(
+            "Der Mimaki hängt bei Loki im USB/IP-Modus für FineCut. "
             "Plot Cut schickt den Auftrag an die USB-Bridge von Loki, und die sieht "
-            "das Geraet in diesem Modus nicht.\n\n"
+            "das Gerät in diesem Modus nicht.\n\n"
             "Es wurde nichts an den Plotter geschrieben.\n\n"
             "Abhilfe: Im Setup unter Verbindung die Art \"Mimaki USB (lokal, wie FineCut)\" "
-            "waehlen. Dann schreibt Plot Cut wie FineCut an den per USB/IP angehaengten Cutter."
+            "wählen. Dann schreibt Plot Cut wie FineCut an den Cutter, auch wenn er per USB/IP "
+            "oder direkt am PC hängt."
         )
     return text
 
@@ -153,17 +161,22 @@ class TcpTransport:
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
                 sock.sendall(data)
         except OSError as exc:
-            raise TransportError(f"TCP-Senden an {self.host}:{self.port} fehlgeschlagen: {exc}") from exc
+            raise TransportError(i18n.trf(
+                "TCP-Senden an {host}:{port} fehlgeschlagen: {exc}",
+                host=self.host, port=self.port, exc=exc,
+            )) from exc
 
     def test(self) -> tuple[bool, str]:
         try:
             with socket.create_connection((self.host, self.port), timeout=self.timeout):
-                return True, f"Verbindung zu {self.host}:{self.port} steht."
+                return True, i18n.trf("Verbindung zu {host}:{port} steht.", host=self.host, port=self.port)
         except OSError as exc:
-            return False, f"Keine Verbindung zu {self.host}:{self.port}: {exc}"
+            return False, i18n.trf(
+                "Keine Verbindung zu {host}:{port}: {exc}", host=self.host, port=self.port, exc=exc
+            )
 
     def describe(self) -> str:
-        return f"TCP {self.host}:{self.port}"
+        return i18n.trf("TCP {host}:{port}", host=self.host, port=self.port)
 
 
 @dataclass
@@ -184,10 +197,10 @@ class SerialTransport:
             for info in ports:
                 if info.vid == vid:
                     return info.device
-        raise TransportError(
-            "Kein USB-Seriell-Plotter (CH340) gefunden. Ist der Plotter im Loki-Client "
-            "an diesen PC angehaengt?"
-        )
+        raise TransportError(i18n.tr(
+            "Kein USB-Seriell-Plotter (CH340) gefunden. Steckt der Plotter direkt am PC, "
+            "oder ist er im Loki-Client angehängt?"
+        ))
 
     def send(self, data: bytes) -> None:
         serial = _import_serial()
@@ -197,7 +210,9 @@ class SerialTransport:
                 ser.write(data)
                 ser.flush()
         except Exception as exc:  # pyserial wirft SerialException
-            raise TransportError(f"Serielles Senden an {port} fehlgeschlagen: {exc}") from exc
+            raise TransportError(i18n.trf(
+                "Serielles Senden an {port} fehlgeschlagen: {exc}", port=port, exc=exc
+            )) from exc
 
     def test(self) -> tuple[bool, str]:
         try:
@@ -207,12 +222,12 @@ class SerialTransport:
             return False, str(exc)
         try:
             with serial.Serial(port, self.baud, timeout=self.timeout):
-                return True, f"Port {port} geoeffnet."
+                return True, i18n.trf("Port {port} geöffnet.", port=port)
         except Exception as exc:
-            return False, f"Port {port} nicht verfuegbar: {exc}"
+            return False, i18n.trf("Port {port} nicht verfügbar: {exc}", port=port, exc=exc)
 
     def describe(self) -> str:
-        return f"COM {self.port} @ {self.baud}"
+        return i18n.trf("COM {port} @ {baud}", port=self.port, baud=self.baud)
 
 
 AUTO_SERIAL_VIDS = (0x1A86,)  # WCH CH340/CH341
@@ -270,10 +285,10 @@ class MimakiUsbTransport:
         ]
         candidates = [self.device_path] if self.device_path else find_mimaki_usb_paths()
         if not candidates:
-            raise TransportError(
-                "Kein Mimaki-USB-Geraet gefunden. Ist der Cutter per Loki-Client (USB/IP) "
-                "an diesen PC angehaengt und der Mimaki-Treiber installiert?"
-            )
+            raise TransportError(i18n.tr(
+                "Kein Mimaki-USB-Gerät gefunden. Steckt der Cutter direkt an diesem PC, "
+                "oder hängt ihn der Loki-Client per USB/IP an, und ist der Mimaki-Treiber installiert?"
+            ))
         invalid = wintypes.HANDLE(-1).value
         last_err = 0
         for path in candidates:
@@ -281,10 +296,11 @@ class MimakiUsbTransport:
             if handle and handle != invalid:
                 return kernel, handle, path
             last_err = ctypes.get_last_error()
-        raise TransportError(
-            "Mimaki-USB-Geraet laesst sich nicht oeffnen "
-            f"(Windows-Fehler {last_err}). Ist der Cutter eingeschaltet und angehaengt?"
-        )
+        raise TransportError(i18n.trf(
+            "Mimaki-USB-Gerät lässt sich nicht öffnen (Windows-Fehler {err}). "
+            "Ist der Cutter eingeschaltet und angeschlossen?",
+            err=last_err,
+        ))
 
     def send(self, data: bytes) -> None:
         import ctypes
@@ -297,10 +313,13 @@ class MimakiUsbTransport:
                 block = data[start : start + self.chunk]
                 ok = kernel.WriteFile(handle, block, len(block), ctypes.byref(written), None)
                 if not ok or written.value != len(block):
-                    raise TransportError(
-                        f"Schreiben an den Mimaki abgebrochen nach {start + written.value} "
-                        f"von {len(data)} Bytes (Windows-Fehler {ctypes.get_last_error()})."
-                    )
+                    raise TransportError(i18n.trf(
+                        "Schreiben an den Mimaki abgebrochen nach {done} von {total} Bytes "
+                        "(Windows-Fehler {err}).",
+                        done=start + written.value,
+                        total=len(data),
+                        err=ctypes.get_last_error(),
+                    ))
         finally:
             kernel.CloseHandle(handle)
 
@@ -310,10 +329,10 @@ class MimakiUsbTransport:
         except TransportError as exc:
             return False, str(exc)
         kernel.CloseHandle(handle)
-        return True, f"Mimaki-USB-Geraet bereit:\n{path}"
+        return True, i18n.trf("Mimaki-USB-Gerät bereit:\n{path}", path=path)
 
     def describe(self) -> str:
-        return "Mimaki USB (lokal)"
+        return i18n.tr("Mimaki USB (lokal)")
 
 
 @dataclass
@@ -324,25 +343,27 @@ class FileTransport:
         try:
             Path(self.path).write_bytes(data)
         except OSError as exc:
-            raise TransportError(f"Datei {self.path} konnte nicht geschrieben werden: {exc}") from exc
+            raise TransportError(i18n.trf(
+                "Datei {path} konnte nicht geschrieben werden: {exc}", path=self.path, exc=exc
+            )) from exc
 
     def test(self) -> tuple[bool, str]:
         parent = Path(self.path).expanduser().resolve().parent
         if parent.exists():
-            return True, f"Schreibe nach {self.path}."
-        return False, f"Ordner existiert nicht: {parent}"
+            return True, i18n.trf("Schreibe nach {path}.", path=self.path)
+        return False, i18n.trf("Ordner existiert nicht: {parent}", parent=parent)
 
     def describe(self) -> str:
-        return f"Datei {self.path}"
+        return i18n.trf("Datei {path}", path=self.path)
 
 
 def _import_serial():
     try:
         import serial  # type: ignore
     except ImportError as exc:
-        raise TransportError(
-            "pyserial ist nicht installiert. Bitte 'pip install pyserial' ausfuehren."
-        ) from exc
+        raise TransportError(i18n.tr(
+            "pyserial ist nicht installiert. Bitte 'pip install pyserial' ausführen."
+        )) from exc
     return serial
 
 
@@ -365,4 +386,4 @@ def build_transport(cfg: dict) -> Transport:
         return MimakiUsbTransport(device_path=cfg.get("usb_path", ""))
     if kind == "file":
         return FileTransport(path=cfg.get("file_path", "out.plt"))
-    raise TransportError(f"Unbekannter Transport: {kind}")
+    raise TransportError(i18n.trf("Unbekannter Transport: {kind}", kind=kind))
