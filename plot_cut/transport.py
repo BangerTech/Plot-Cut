@@ -39,28 +39,45 @@ class Transport(Protocol):
     def describe(self) -> str: ...
 
 
-def parse_oh_response(raw: bytes, step_mm: float) -> tuple[float, float] | None:
-    """HP-GL ``OH;``: vier Zahlen xmin,ymin,xmax,ymax in Plotterschritten."""
+def parse_oh_response(
+    raw: bytes, step_mm: float, language: str = "hpgl"
+) -> tuple[float, float] | None:
+    """HP-GL ``OH;``: xmin,ymin,xmax,ymax in Plotterschritten.
+
+    Beim Mimaki ist X der Folienvorschub (Länge) und Y die Wagenbreite.
+    """
     text = raw.decode("ascii", errors="ignore")
     nums = [int(n) for n in re.findall(r"-?\d+", text)]
     if len(nums) < 4:
         return None
     xmin, ymin, xmax, ymax = nums[-4:]
-    width = abs(xmax - xmin) * step_mm
-    height = abs(ymax - ymin) * step_mm
+    xspan = abs(xmax - xmin) * step_mm
+    yspan = abs(ymax - ymin) * step_mm
+    width, height = (yspan, xspan) if language == "mgl2" else (xspan, yspan)
     if width < 10 or height < 10:
         return None
     return (width, height)
 
 
-def query_sheet_size(transport: Transport, step_mm: float = 0.025) -> tuple[float, float] | None:
+def query_sheet_size(
+    transport: Transport,
+    step_mm: float = 0.025,
+    language: str = "hpgl",
+    *,
+    mimaki_usb_fallback: bool = False,
+) -> tuple[float, float] | None:
+    raw = b""
     query = getattr(transport, "query", None)
-    if query is None:
-        return None
-    raw = query(b"OH;")
+    if query is not None:
+        raw = query(b"OH;") or b""
+    if not raw and mimaki_usb_fallback and language == "mgl2" and find_mimaki_usb_paths():
+        try:
+            raw = MimakiUsbTransport().query(b"OH;") or b""
+        except TransportError:
+            raw = b""
     if not raw:
         return None
-    return parse_oh_response(raw, step_mm)
+    return parse_oh_response(raw, step_mm, language)
 
 
 @dataclass
@@ -413,6 +430,25 @@ class MimakiUsbTransport:
 
     def describe(self) -> str:
         return i18n.tr("Mimaki USB (lokal)")
+
+
+def send_or_local_mimaki(transport: Transport, data: bytes) -> tuple[Transport, str]:
+    """Sendet den Auftrag. Hält USB/IP den Mimaki, schreibt der lokale Treiber.
+
+    Rueckgabe: der Weg, der geschrieben hat, und der Loki-Text, falls Loki
+    nichts geschrieben hat und der lokale Treiber eingesprungen ist.
+    """
+    try:
+        transport.send(data)
+        return transport, ""
+    except TransportError as exc:
+        low = str(exc).lower()
+        held = "0a50" in low or "gerätedatei" in low or "geraetedatei" in low
+        if not held or not find_mimaki_usb_paths():
+            raise
+        usb = MimakiUsbTransport()
+        usb.send(data)
+        return usb, str(exc)
 
 
 @dataclass

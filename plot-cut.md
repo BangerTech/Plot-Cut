@@ -37,6 +37,8 @@ Die GUI (PySide6) sitzt obenauf:
 - `ui/plot_dialog.py`      [Plot]: Folienvorschau, Drehen, Spiegeln H/V, Kacheln, Passermarken
 - `ui/plot_out_dialog.py`  [Plot Out]: Schneidbedingungen, Vorschau mit Farbcodes, Simulation, Senden
 - `ui/setup_dialog.py`     Setup: VectorCraft, Plotter-Profile, Verbindung, Bedingungen, Favoriten
+- `joblog.py`              Protokoll je Schnitt (Textdateien, alte Tage werden geloescht)
+- `ui/log_dialog.py`       Protokollfenster, Knopf im Panel-Kopf
 - `ui/preview.py`          gemeinsame Vorschau (Folie, Raster, Masse, Zoom/Pan)
 
 ## Datenfluss / Koordinaten
@@ -46,11 +48,20 @@ Die GUI (PySide6) sitzt obenauf:
   rechnet `geometry._svg_scale` einheitenlose Werte als pt (25,4/72 mm) und Werte mit
   Einheit als CSS-px (25,4/96 mm). Regressionstest: `test_vectorcraft_svg_is_in_points`.
 - Intern wird alles in Millimetern gefuehrt, y nach oben, Ursprung = Plotter-Nullpunkt.
+- MGL-IIc (Mimaki): die erste Koordinate ist der Vorschub (lange Achse), die zweite
+  der Schlitten (Folienbreite). `_Emitter.swap_xy` tauscht darum x und y, sonst
+  stehen nebeneinander angeordnete Formen auf der Folie uebereinander im Vorschub.
+  HP-GL/DMPL tauschen nicht (dort ist x der Schlitten).
 - MGL-IIc: 0,025 mm als Ganzzahl-Schritte, 0,01 mm als Millimeter mit zwei Nachkommastellen.
   HP-GL/DMPL: 0,10 / 0,05 / 0,025 / 0,010 mm (XFCut: 254 / 508 / 1016 / 2032 pro Zoll).
 - Bezierkurven werden mit `plotter.crv_res` (Standard 0,05 mm) zu Polylinien abgeflacht.
-  Ein geschlossener Linienzug, der auf einem Kreis liegt, wird beim Schreiben als
-  `AA` ausgegeben (MGL-IIc und HP-GL).
+  Volle Kreise gehen als dieselben Linien. `AA` hat der CG-60SR beim Schneiden
+  ausgelassen.
+- Jeder Punkt geht als eigener `PD x,y;`, wie FineCut. In `MmkCutCtrl.dll` nimmt
+  das Format `PD%.2lf,%.2lf;` (bei `0x180030d78`) genau ein Paar; es gibt kein
+  Mehr-Paar-`PD`. Ein `PD` mit vielen Paaren hat der CG-60SR ausgelassen (Kreis
+  blieb ungeschnitten), das kurze Rechteck mit vier Paaren lief noch. Der Kopf
+  bleibt zwischen den `PD` unten, jedes `PD` schneidet vom aktuellen Punkt weiter.
 
 ## Vorschau
 
@@ -64,7 +75,8 @@ Die GUI (PySide6) sitzt obenauf:
 - Plot-Dialog: Tabs **Vorschau** (gefuellt) und **Schneidelinie** (nur Kontur).
   Rechte Leiste wie FineCut:
   - Runde Knoepfe: Initialisieren (alles zuruecksetzen), Blattgröße einlesen
-    (`OH;` an Mimaki-USB, COM oder TCP; ohne Antwort die Profilwerte),
+    (`OH;` an Mimaki-USB, COM oder TCP; bei Loki an den lokalen Mimaki-USB,
+    weil die Loki-API nur sendet; ohne Antwort die Profilwerte),
     Schneiden... (-> Ausplotten), Beenden.
   - Tabelle mit ↔/↕: Blattgröße, Offset, Größe, Skalierung(%) (gekoppelt "—",
     ausser bei Verzerren), Kopieren X/Y als Raster, Kopierabstand X/Y,
@@ -124,6 +136,14 @@ Die GUI (PySide6) sitzt obenauf:
 Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
 `%APPDATA%\PlotCut\settings.json` (Code: `plot_cut/settings.py`).
 
+Das Protokoll ist davon getrennt. `plot_cut/joblog.py` schreibt eine Textdatei
+pro Tag nach `%APPDATA%\PlotCut\logs\plot-cut-JJJJ-MM-TT.log`. Beim Schreiben
+werden Dateien geloescht, deren Datum 7 Tage oder mehr zurueckliegt (`KEEP_DAYS`).
+Der Knopf **Log** im Panel zeigt den Inhalt. Ein Schnitt traegt Ziel, ob er
+ankam, Endaktion, letzten Befehl, ob `AA` enthalten war, und den Befehlsstrom.
+Kam der Auftrag nicht an, steht das ebenfalls dort, samt dem Strom, der nicht
+geschrieben wurde. Eine gespeicherte Plotdatei ist als nicht gesendet markiert.
+
 ### Schema Version 3 (aktuell)
 
 ```json
@@ -174,7 +194,7 @@ Das Projekt nutzt keine Datenbank. Alle Einstellungen liegen als JSON unter
         "sort_mode": "all",         // "all" | "color"
         "park": true,               // Kopf nach dem Schnitt hinter das Motiv
         "park_mm": 20.0,
-        "end_action": "stay",       // "origin" | "feed" | "stay"
+        "end_action": "origin",     // "origin" | "feed" | "stay". FineCut faehrt zum Ursprung.
         "feed_mm": 20.0,
         "extra_passes": 0,
         "pause_per_color": false
@@ -269,6 +289,8 @@ Der Befund steht im Abschnitt "XFCut und generische Plotter".
 
 Der Weg `loki` (`/api/plotcut/.../job`) geht ueber Lokis USB-Bridge und scheitert im
 USB/IP-Modus mit 503 "USB 0a50:0001 nicht gefunden", weil usbip das Geraet haelt.
+Plot Cut schreibt den Auftrag dann an den lokalen Mimaki-USB, wenn der Treiber
+ihn auf diesem PC sieht.
 
 Die API ist ab Loki 1.5.0 da. Transport im Profil auf `loki` stellen, Host = Pi,
 `device` = `id` aus `GET /api/plotcut/devices`.
@@ -455,7 +477,8 @@ Umgesetzt: Werkzeugnummern, Geschwindigkeit 1–120, Andruck 1–500, Aufloesung
 0,01 mm, Start `IN;IP0,0,1,1;`, Offset `ZO`, Blattgroesse per `OH;`, Endaktion
 (Ursprung / Vorschub / stehen bleiben), Kopf abheben, Bahnen, Rahmen, Passermarken
 als Schnittpfade, WYSIWYG oder Ursprung, Spiegeln H/V, Kurvenaufloesung als
-Segmentlaenge, volle Kreise als `AA`.
+Segmentlaenge. Volle Kreise gehen wieder als Linien: der CG-60SR hat `AA`
+beim Schneiden ausgelassen und nur die Geraden geschnitten.
 
 ### Bogenbefehl (Ghidra 12.1.4, 2026-10-12)
 
@@ -466,9 +489,10 @@ Koordinaten) und schreibt an den Plotter:
 - geschlossener Kreis, Startpunkt gleich Endpunkt: `AA%.2f,%.2f,%.2f;`
   Mittelpunkt X, Mittelpunkt Y, Winkel fest `360.0` (Konstante bei `0x18003db50`).
   Das ist HP-GL Arc Absolute: vom aktuellen Punkt um den Mittelpunkt.
-  Plot Cut schreibt das fuer erkannte volle Kreise, bei MGL-IIc mit 0,01 mm als
-  `AA%.2f` und sonst als Ganzzahl-Schritte. Im Uhrzeigersinn ist der Winkel `-360`.
-  DMPL bleibt bei Geraden.
+  Ein Schnitt auf dem CG-60SR hat den Kreis dabei nicht ausgefuehrt und nur
+  die folgenden Geraden geschnitten. Plot Cut schreibt `AA` deshalb nicht,
+  volle Kreise gehen als `PU`/`PD`. `full_circle` bleibt im Code, bis die
+  Formatzeile auf dem Geraet belegt ist.
 - sonst: `ZC%.2f,%.2f,%.2f,%.2f;` mit zwei Punkten aus der zusammengefassten Kette.
   Welche der vier Zahlen Mittelpunkt, Zwischenpunkt oder Ende ist, ist aus diesem
   Lauf nicht fest. Deshalb schreibt Plot Cut `ZC` noch nicht.
@@ -477,6 +501,11 @@ Koordinaten) und schreibt an den Plotter:
 
 `AA%f,%f,%f;` und `ZCAA%d,%.2lf,...` liegen in derselben Tabelle fuer andere
 Formatzeilen. Welche Zeile der CG-60SR nimmt, bleibt offen.
+
+`PU`/`PD` liegen als Format `PU%.2lf,%.2lf;` (`0x180030d58`) und `PD%.2lf,%.2lf;`
+(`0x180030d78`) vor, dazu `%lf`-Varianten. Jedes nimmt genau ein Koordinatenpaar.
+FineCut schreibt also einen Befehl je Punkt. Plot Cut macht das jetzt genauso.
+Die Format-Zeiger liegen bei `0x1800319e0` ff., genutzt in `FUN_18000a0e0`.
 
 Weiterhin ohne Bytefolge, deshalb nicht geraten: Perforation, Tombo-Erkennung,
 `JT`/`JG2`. `!PT` wird nicht mehr geschrieben.

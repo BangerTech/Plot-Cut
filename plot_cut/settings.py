@@ -76,7 +76,7 @@ def _profile(
             "sort": True,
             "inner_first": True,
             "send_conditions": True,
-            "end_action": "stay",
+            "end_action": "origin",
             "feed_mm": 20.0,
             "extra_passes": 0,
             "pause_per_color": False,

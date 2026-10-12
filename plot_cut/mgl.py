@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .geometry import CutJob, Polyline, bounds_of, circle_arc
+from .geometry import CutJob, Polyline, bounds_of
 
 TOOLS = [
     ("CT1", 1),
@@ -69,7 +69,7 @@ class PlotOptions:
     group_by_color: bool = True
     park_mm: tuple[float, float] | None = None
     step_mm: float = 0.025
-    end_action: str = "stay"  # "origin" | "feed" | "stay"
+    end_action: str = "origin"  # "origin" | "feed" | "stay"
     feed_mm: float = 20.0
     extra_passes: int = 0  # zusaetzliche Wiederholungen jedes Pfads
 
@@ -87,8 +87,14 @@ class _Emitter:
         self.language = language
         self.step_mm = step_mm
         self.mgl_float = language == "mgl2" and abs(step_mm - 0.01) < 1e-9
+        # Beim Mimaki ist die erste Koordinate der Vorschub (lange Achse), die
+        # zweite der Schlitten (Folienbreite). Die Design-Horizontale muss auf die
+        # Breite, sonst stehen nebeneinander angeordnete Formen uebereinander.
+        self.swap_xy = language == "mgl2"
 
     def coord(self, x_mm: float, y_mm: float) -> str:
+        if self.swap_xy:
+            x_mm, y_mm = y_mm, x_mm
         if self.mgl_float:
             return f"{x_mm:.2f},{y_mm:.2f}"
         return f"{mm_to_steps(x_mm, self.step_mm)},{mm_to_steps(y_mm, self.step_mm)}"
@@ -111,17 +117,18 @@ class _Emitter:
         if self.language == "dmpl":
             return None
         angle = 360.0 if ccw else -360.0
-        if self.mgl_float:
-            return f"AA{cx_mm:.2f},{cy_mm:.2f},{angle:.2f};"
-        return f"AA{mm_to_steps(cx_mm, self.step_mm)},{mm_to_steps(cy_mm, self.step_mm)},{int(angle)};"
+        ang = f"{angle:.2f}" if self.mgl_float else f"{int(angle)}"
+        return f"AA{self.coord(cx_mm, cy_mm)},{ang};"
 
     def cut(self, points: list[tuple[float, float]]) -> list[str]:
         if not points:
             return []
         if self.language == "dmpl":
             return [f"D{self.coord(x, y)}" for x, y in points]
-        rest = ",".join(self.coord(x, y) for x, y in points)
-        return [f"PD{rest};"] if rest else []
+        # Ein Koordinatenpaar pro PD, wie FineCut (PD%.2lf,%.2lf; in MmkCutCtrl.dll).
+        # Ein PD mit vielen Paaren liess der CG-60SR aus (Kreis ungeschnitten),
+        # das kurze Rechteck lief noch. Der Kopf bleibt unten, jedes PD schneidet weiter.
+        return [f"PD{self.coord(x, y)};" for x, y in points]
 
     def origin(self) -> list[str]:
         cmds = [self.move(0.0, 0.0)]
@@ -171,18 +178,8 @@ def _group_polylines(
 def _polyline_commands(pl: Polyline, emit: _Emitter, extra_passes: int) -> list[str]:
     if pl.is_empty():
         return []
-    arc = circle_arc(pl)
-    aa = emit.full_circle(*arc[:3]) if arc is not None else None
-    if arc is not None and aa is not None:
-        _cx, _cy, _ccw, tail = arc
-        cmds = [emit.move(*pl.points[0]), aa]
-        if tail:
-            cmds.extend(emit.cut(tail))
-        for _ in range(max(0, extra_passes)):
-            cmds.extend([emit.move(*pl.points[0]), aa])
-            if tail:
-                cmds.extend(emit.cut(tail))
-        return cmds
+    # Volle Kreise bleiben Linien (ein PD je Punkt). AA hat der CG-60SR beim
+    # Schneiden ausgelassen; full_circle bleibt im Code, bis das Format belegt ist.
     pts = pl.points
     cmds = [emit.move(*pts[0])]
     cmds.extend(emit.cut(pts[1:]))

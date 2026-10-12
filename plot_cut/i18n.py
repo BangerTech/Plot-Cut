@@ -17,6 +17,15 @@ EN: dict[str, str] = {
     "Plotter": "Plotter",
     "Aktiven Plotter wählen": "Choose the active plotter",
     "Info / Verbindung": "Info / connection",
+    "Log": "Log",
+    "Gesendete Aufträge anzeigen": "Show jobs that were sent",
+    "Protokoll": "Log",
+    "Einträge älter als 7 Tage werden gelöscht. Unten steht der Befehlsstrom, der rausgegangen ist.": (
+        "Entries older than 7 days are deleted. Below is the command stream that went out."
+    ),
+    "Aktualisieren": "Refresh",
+    "Schliessen": "Close",
+    "Noch kein Eintrag.": "No entries yet.",
     "Panel schliessen": "Close the panel",
     "Auswahl schneiden (Plot)": "Cut the selection (Plot)",
     "Plotter/User Setup": "Plotter / user setup",

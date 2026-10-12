@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
 from .. import geometry as g
 from .. import i18n
 from .. import mgl
-from ..transport import TransportError, build_transport
+from .. import joblog
+from ..transport import TransportError, build_transport, send_or_local_mimaki
 from .popup import critical, information, question
 from .preview import PreviewWidget, view_buttons
 from .style import FINECUT_STYLE, ComboBox
@@ -279,7 +280,7 @@ class PlotOutDialog(QDialog):
         self.end_group = QButtonGroup(self)
         for i, rb in enumerate((self.end_origin, self.end_feed, self.end_stay)):
             self.end_group.addButton(rb, i)
-        action = d.get("end_action", "stay")
+        action = d.get("end_action", "origin")
         {"origin": self.end_origin, "feed": self.end_feed}.get(action, self.end_stay).setChecked(True)
         grid.addWidget(i18n.lab("Nach dem Schnitt"), 3, 1)
         grid.addWidget(self.end_origin, 4, 1)
@@ -510,6 +511,7 @@ class PlotOutDialog(QDialog):
         self._persist_defaults()
         split = self.pause_color.isChecked()
         chunks = self._generate_chunks(split_colors=split)
+        job = self._build_job()
         transport = build_transport(self.controller.profile["transport"])
         sent = 0
         for i, data in enumerate(chunks):
@@ -519,12 +521,40 @@ class PlotOutDialog(QDialog):
                     "Nächste Farbe",
                     "Die nächste Farbe ist bereit. Folie wechseln oder Blatt prüfen, dann Ja zum Weiterschneiden.",
                 ):
+                    joblog.append(
+                        "Weitere Farben nicht gesendet",
+                        f"Gesendet: {i} von {len(chunks)} Farben. Der Rest blieb hier.",
+                    )
                     break
+            text = data.decode("ascii", errors="replace")
+            head = (
+                f"Pfade: {len(job.polylines)}\n"
+                f"Bytes: {len(data)}\n"
+                f"Endaktion: {self._end_action()}\n"
+                f"Parkposition: {'ja' if self.park.isChecked() else 'nein'}\n"
+                f"{joblog.command_note(text)}"
+            )
             try:
-                transport.send(data)
+                transport, skipped = send_or_local_mimaki(transport, data)
             except TransportError as exc:
+                joblog.append(
+                    "Schnitt nicht gesendet",
+                    f"Ziel war {transport.describe()}.\nEs wurde nichts an den Plotter geschrieben.\n{head}\n{exc}",
+                    text,
+                )
                 critical(self, "Senden fehlgeschlagen", str(exc))
                 return
+            title = "Schnitt gesendet"
+            if skipped:
+                title = "Schnitt lokal gesendet, Loki hat nichts geschrieben"
+                note = (
+                    f"Ziel: {transport.describe()}\n"
+                    "Loki hat den Auftrag nicht angenommen. Darüber wurde nichts geschrieben.\n"
+                    f"{skipped}\n{head}"
+                )
+            else:
+                note = f"Ziel: {transport.describe()}\n{head}"
+            joblog.append(title, note, text)
             sent += len(data)
         information(self, "Schneiden", i18n.trf(
             "Gesendet an {where} ({n} Bytes).", where=transport.describe(), n=sent
@@ -547,6 +577,11 @@ class PlotOutDialog(QDialog):
         except OSError as exc:
             critical(self, "Fehler", str(exc))
             return
+        joblog.append(
+            "Als Datei gespeichert, nicht an den Plotter gesendet",
+            f"{path}\nBytes: {len(data)}\n{joblog.command_note(data.decode('ascii', errors='replace'))}",
+            data.decode("ascii", errors="replace"),
+        )
         information(self, "Gespeichert", i18n.trf("{n} Bytes nach {path}.", n=len(data), path=path))
 
     def _persist_defaults(self) -> None:

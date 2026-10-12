@@ -103,6 +103,11 @@ class Panel(QWidget):
         lay.addWidget(title)
         lay.addStretch(1)
 
+        log_btn = QToolButton()
+        i18n.bind(log_btn, text="Log", tip="Gesendete Aufträge anzeigen")
+        log_btn.clicked.connect(self.controller.show_log)
+        lay.addWidget(log_btn)
+
         info_btn = QToolButton()
         info_btn.setIcon(icons.icon_info())
         i18n.bind(info_btn, tip="Info / Verbindung")

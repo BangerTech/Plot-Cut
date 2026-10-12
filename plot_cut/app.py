@@ -459,6 +459,11 @@ class AppController:
         popup.information(self.panel, "Verbindungstest", "\n".join(lines))
         self._status("Test abgeschlossen")
 
+    def show_log(self) -> None:
+        from .ui.log_dialog import LogDialog
+
+        LogDialog(self.panel).exec()
+
     def show_info(self) -> None:
         from . import __version__
 

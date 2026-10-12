@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from .. import geometry as g
 from .. import i18n
+from .. import joblog
 from ..transport import TransportError, build_transport, query_sheet_size
 from .icons import round_icon
 from .popup import critical, information
@@ -665,8 +666,14 @@ class PlotDialog(QDialog):
         step = float(plotter.get("step_mm", 0.025))
         size = None
         try:
-            transport = build_transport(self.controller.profile["transport"])
-            size = query_sheet_size(transport, step)
+            transport_cfg = self.controller.profile["transport"]
+            transport = build_transport(transport_cfg)
+            size = query_sheet_size(
+                transport,
+                step,
+                str(plotter.get("language", "mgl2")),
+                mimaki_usb_fallback=transport_cfg.get("kind") in ("loki", "file"),
+            )
         except TransportError:
             size = None
         if size is not None:
@@ -674,6 +681,10 @@ class PlotDialog(QDialog):
             plotter["sheet_width_mm"] = width
             plotter["sheet_height_mm"] = height
             self.controller.save()
+            joblog.append(
+                "Blattgröße gelesen",
+                f"{width:.1f} × {height:.1f} mm",
+            )
             information(
                 self,
                 "Blattgröße",
@@ -682,6 +693,10 @@ class PlotDialog(QDialog):
         else:
             width = float(plotter.get("sheet_width_mm", 610))
             height = float(plotter.get("sheet_height_mm", 1000))
+            joblog.append(
+                "Blattgröße nicht gelesen",
+                f"Keine Antwort auf OH;. Profil bleibt {width:.1f} × {height:.1f} mm.",
+            )
             information(
                 self,
                 "Blattgröße",
