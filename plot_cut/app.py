@@ -251,7 +251,8 @@ class AppController:
             self._status("Hinweis: evtl. nichts ausgewaehlt")
 
         try:
-            polylines = g.polylines_from_bytes(selection.data, selection.fmt)
+            flatness = float(self.profile["plotter"].get("crv_res", g.DEFAULT_FLATNESS_MM))
+            polylines = g.polylines_from_bytes(selection.data, selection.fmt, flatness=flatness)
         except Exception as exc:  # defensiv: Parserfehler nicht durchreichen
             self._status("Fehler beim Lesen")
             popup.critical(self.panel, "Importfehler", str(exc))

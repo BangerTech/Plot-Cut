@@ -133,7 +133,7 @@ class Panel(QWidget):
             ("Kontur", icons.icon_generic("K"), "Äußerste Kante der Kontur als Schnittlinie", self.controller.on_contour, True),
             ("Entgittern", icons.icon_generic("E"), "Entgitterlinien (folgt)", None, False),
             ("Cut-Ebene", icons.icon_generic("C"), "Auf Cut-Ebene verschieben (folgt)", None, False),
-            ("Marken", icons.icon_generic("M"), "Passermarken (folgt)", None, False),
+            ("Marken", icons.icon_generic("M"), "Passermarken im Plot-Fenster", self.controller.on_plot, True),
             ("Line Edit", icons.icon_generic("L"), "Linien bearbeiten (folgt)", None, False),
             ("RasterLink", icons.icon_generic("R"), "Ausgabe an RasterLink (folgt)", None, False),
         ]

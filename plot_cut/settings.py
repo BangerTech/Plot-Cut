@@ -22,14 +22,42 @@ from .mgl import CutCondition
 APP_DIR_NAME = "PlotCut"
 LEGACY_APP_DIR_NAME = "MimakiCut"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
+
+
+def _remap_old_mgl_tool(value: int) -> int:
+    """Alte Auswahlliste CT1=1, CT2=2, CT3=3 -> FineCut SP-Nummern."""
+    if value == 2:
+        return 3
+    if value == 3:
+        return 4
+    return value
+
+
+def _remap_tools_in_profile(prof: dict[str, Any]) -> None:
+    if str(prof.get("plotter", {}).get("language", "mgl2")) != "mgl2":
+        return
+    defaults = prof.setdefault("defaults", {})
+    defaults["tool"] = _remap_old_mgl_tool(int(defaults.get("tool", 1)))
+    table = prof.get("conditions_by_color", {})
+    if isinstance(table, dict):
+        for raw in table.values():
+            if isinstance(raw, dict) and "tool" in raw:
+                raw["tool"] = _remap_old_mgl_tool(int(raw["tool"]))
 
 
 def _profile(
     model: str, language: str, sheet_width_mm: float, speed: int, pressure: int, offset: float
 ) -> dict[str, Any]:
     return {
-        "plotter": {"model": model, "language": language, "sheet_width_mm": sheet_width_mm},
+        "plotter": {
+            "model": model,
+            "language": language,
+            "sheet_width_mm": sheet_width_mm,
+            "sheet_height_mm": 1000.0,
+            "step_mm": 0.025,
+            "crv_res": 0.05,
+        },
         "transport": {
             "kind": "file",
             "host": "192.168.1.50",
@@ -48,6 +76,10 @@ def _profile(
             "sort": True,
             "inner_first": True,
             "send_conditions": True,
+            "end_action": "stay",
+            "feed_mm": 20.0,
+            "extra_passes": 0,
+            "pause_per_color": False,
         },
         "conditions_by_color": {},
     }
@@ -120,6 +152,16 @@ def migrate(data: dict[str, Any]) -> dict[str, Any]:
 
     if merged.get("active_profile") not in merged["profiles"]:
         merged["active_profile"] = next(iter(merged["profiles"]))
+    previous = int(data.get("version", 1) or 1)
+    if previous < 3:
+        for prof in merged["profiles"].values():
+            if isinstance(prof, dict):
+                _remap_tools_in_profile(prof)
+        favorites = merged.get("favorites", {})
+        if isinstance(favorites, dict):
+            for fav in favorites.values():
+                if isinstance(fav, dict) and "tool" in fav:
+                    fav["tool"] = _remap_old_mgl_tool(int(fav["tool"]))
     merged["version"] = SETTINGS_VERSION
     return merged
 
@@ -188,7 +230,7 @@ def rename_profile(settings: dict[str, Any], old: str, new: str) -> bool:
 def default_condition(profile: dict[str, Any]) -> CutCondition:
     d = profile.get("defaults", {})
     return CutCondition(
-        tool=1,
+        tool=int(d.get("tool", 1)),
         speed=int(d.get("speed", 30)),
         pressure=int(d.get("pressure", 100)),
         offset=float(d.get("offset", 0.3)),

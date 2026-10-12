@@ -29,8 +29,9 @@ from PySide6.QtWidgets import (
 
 from .. import geometry as g
 from .. import i18n
+from ..transport import TransportError, build_transport, query_sheet_size
 from .icons import round_icon
-from .popup import critical
+from .popup import critical, information
 from .preview import PreviewWidget
 from .style import FINECUT_STYLE, ComboBox
 
@@ -120,6 +121,7 @@ class PlotDialog(QDialog):
         self.link_scale.setText(linked)
         self._sync_size_from_source()
         self._apply_fixed_origin()
+        self._rebuild_tile_list()
 
     # -- Aufbau ------------------------------------------------------------
 
@@ -165,7 +167,7 @@ class PlotDialog(QDialog):
             "init", "Initialisieren", "Alle Einstellungen dieses Fensters zurücksetzen", self._initialize))
         row.addWidget(self._round_button(
             "sheet", "Blattgröße einlesen",
-            "Folienbreite und -länge aus dem Plotter-Profil übernehmen", self._read_sheet_size))
+            "Folienbreite und -länge vom Plotter lesen, sonst aus dem Profil", self._read_sheet_size))
         row.addWidget(self._round_button("cut", "Schneiden...", "Weiter zum Ausplotten", self._open_plot_out, 50))
         row.addWidget(self._round_button("quit", "Beenden", "Fenster schließen", self.reject))
         return row
@@ -327,9 +329,12 @@ class PlotDialog(QDialog):
         self._rotate_index = int(per_file.get("rotate_index", 0)) % 4
         opts = QGridLayout()
         opts.setHorizontalSpacing(14)
-        self.mirror = QCheckBox(i18n.tr("Spiegeln"))
-        self.mirror.setChecked(bool(per_file.get("mirror", False)))
-        self.mirror.toggled.connect(lambda _on: self._on_rotate())
+        self.mirror_h = QCheckBox(i18n.tr("Spiegeln H"))
+        self.mirror_h.setChecked(bool(per_file.get("mirror", False) or per_file.get("mirror_h", False)))
+        self.mirror_h.toggled.connect(lambda _on: self._on_rotate())
+        self.mirror_v = QCheckBox(i18n.tr("Spiegeln V"))
+        self.mirror_v.setChecked(bool(per_file.get("mirror_v", False)))
+        self.mirror_v.toggled.connect(lambda _on: self._on_rotate())
         self.distort = QCheckBox(i18n.tr("Verzerren"))
         self.distort.setToolTip(i18n.tr("Breite und Höhe unabhängig ändern"))
         self.distort.setChecked(bool(per_file.get("distort", False)))
@@ -340,35 +345,87 @@ class PlotDialog(QDialog):
         ))
         self.fixed_origin.setChecked(bool(per_file.get("fixed_origin", False)))
         self.fixed_origin.toggled.connect(self._apply_fixed_origin)
-        opts.addWidget(self.mirror, 0, 0)
-        opts.addWidget(self.distort, 1, 0)
-        opts.addWidget(self.fixed_origin, 2, 0)
+        self.wysiwyg = QCheckBox(i18n.tr("WYSIWYG"))
+        self.wysiwyg.setToolTip(i18n.tr(
+            "Lage auf der Zeichenfläche behalten. Aus = Motiv an den Plotter-Ursprung schieben."
+        ))
+        self.wysiwyg.setChecked(bool(per_file.get("wysiwyg", False)))
+        self.wysiwyg.toggled.connect(lambda _on: self._refresh(refit=False))
+        opts.addWidget(self.mirror_h, 0, 0)
+        opts.addWidget(self.mirror_v, 1, 0)
+        opts.addWidget(self.distort, 2, 0)
+        opts.addWidget(self.fixed_origin, 3, 0)
+        opts.addWidget(self.wysiwyg, 4, 0)
 
-        mark_mid = QCheckBox(i18n.tr("Justiermarke Mitte"))
-        mark_corner = QCheckBox(i18n.tr("Justiermarke Ecke"))
-        mark_mm = self._mm(0, 100, 10)
-        for w in (mark_mid, mark_corner, mark_mm):
-            w.setEnabled(False)
-            w.setToolTip(i18n.tr("Justiermarken folgen in einer späteren Version"))
-        opts.addWidget(mark_mid, 0, 1)
-        opts.addWidget(mark_mm, 0, 2)
-        opts.addWidget(mark_corner, 1, 1)
+        self.crv_res = self._mm(0.01, 2.0, float(self.controller.profile["plotter"].get("crv_res", 0.05)), decimals=2)
+        self.crv_res.setToolTip(i18n.tr("Maximale Abweichung, bevor eine Kurve zur Geraden wird. Gilt beim nächsten Laden."))
+        opts.addWidget(i18n.lab("Kurvenauflösung"), 0, 1)
+        opts.addWidget(self.crv_res, 0, 2)
         unit_row = QHBoxLayout()
         unit_row.addWidget(i18n.lab("Einheit:"))
         unit = ComboBox()
         unit.addItem("mm")
         unit_row.addWidget(unit, 1)
-        opts.addLayout(unit_row, 2, 1, 1, 2)
+        opts.addLayout(unit_row, 1, 1, 1, 2)
         lay.addLayout(opts)
         tabs.addTab(layout_page, i18n.tr("Layout"))
-
-        tabs.addTab(self._placeholder(
-            "Kacheln: große Motive in Bahnen mit Überlappung aufteilen. Kommt in einer späteren Version."
-        ), i18n.tr("Kacheln Abstand"))
-        tabs.addTab(self._placeholder(
-            "Passermarken (Konturschnitt nach Druck) kommen in einer späteren Version."
-        ), i18n.tr("Passermarken"))
+        tabs.addTab(self._build_tile_page(per_file), i18n.tr("Kacheln Abstand"))
+        tabs.addTab(self._build_marks_page(per_file), i18n.tr("Passermarken"))
         return tabs
+
+    def _build_tile_page(self, per_file: dict) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        self._saved_tile_skip = {str(k) for k in per_file.get("tile_skip", [])}
+        self.tile_on = QCheckBox(i18n.tr("Bahnen"))
+        self.tile_on.setToolTip(i18n.tr("Motiv in Foliengrösse teilen, wenn es grösser als die Folie ist."))
+        self.tile_on.setChecked(bool(per_file.get("tile_on", False)))
+        self.tile_on.toggled.connect(self._on_tiles_changed)
+        lay.addWidget(self.tile_on)
+        row = QHBoxLayout()
+        row.addWidget(i18n.lab("Überlappung"))
+        self.tile_overlap = self._mm(0, 200, float(per_file.get("tile_overlap", 0)))
+        self.tile_overlap.valueChanged.connect(self._on_tiles_changed)
+        row.addWidget(self.tile_overlap)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.tile_list = QListWidget()
+        self.tile_list.itemChanged.connect(lambda _item: self._refresh(refit=False))
+        lay.addWidget(self.tile_list, 1)
+        return page
+
+    def _build_marks_page(self, per_file: dict) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        self.marks_on = QCheckBox(i18n.tr("Passermarken mitschneiden"))
+        self.marks_on.setChecked(bool(per_file.get("marks_on", False)))
+        self.marks_on.toggled.connect(lambda _on: self._refresh(refit=False))
+        lay.addWidget(self.marks_on)
+        self.marks_inner = QCheckBox(i18n.tr("Innen"))
+        self.marks_inner.setToolTip(i18n.tr("Aus = aussen um das Motiv, an = innen am Rand."))
+        self.marks_inner.setChecked(bool(per_file.get("marks_inner", False)))
+        self.marks_inner.toggled.connect(lambda _on: self._refresh(refit=False))
+        lay.addWidget(self.marks_inner)
+        row = QHBoxLayout()
+        row.addWidget(i18n.lab("Größe"))
+        self.marks_size = self._mm(4, 40, float(per_file.get("marks_size", 10)))
+        self.marks_size.valueChanged.connect(lambda: self._refresh(refit=False))
+        row.addWidget(self.marks_size)
+        row.addWidget(i18n.lab("Linienbreite"))
+        self.marks_line = self._mm(0.3, 1.0, float(per_file.get("marks_line", 1.0)), decimals=1)
+        row.addWidget(self.marks_line)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.marks_round = QCheckBox(i18n.tr("Runde Füllung"))
+        self.marks_round.setChecked(bool(per_file.get("marks_round", False)))
+        self.marks_round.toggled.connect(lambda _on: self._refresh(refit=False))
+        self.marks_extra = QCheckBox(i18n.tr("Zusätzliche Marke"))
+        self.marks_extra.setChecked(bool(per_file.get("marks_extra", False)))
+        self.marks_extra.toggled.connect(lambda _on: self._refresh(refit=False))
+        lay.addWidget(self.marks_round)
+        lay.addWidget(self.marks_extra)
+        lay.addStretch(1)
+        return page
 
     def _placeholder(self, text: str) -> QWidget:
         page = QWidget()
@@ -446,8 +503,10 @@ class PlotDialog(QDialog):
         deg = self._rotate_degrees()
         if deg:
             work = g.rotate(work, deg)
-        if self.mirror.isChecked():
+        if self.mirror_h.isChecked():
             work = g.mirror_x(work)
+        if self.mirror_v.isChecked():
+            work = g.mirror_y(work)
         return work
 
     def _enabled_source(self) -> list[g.Polyline]:
@@ -570,7 +629,9 @@ class PlotDialog(QDialog):
     def _reset_original(self) -> None:
         self._block = True
         self._rotate_index = 0
-        self.mirror.setChecked(False)
+        self.mirror_h.setChecked(False)
+        self.mirror_v.setChecked(False)
+        self.wysiwyg.setChecked(False)
         self.distort.setChecked(False)
         self.offset_x.setValue(0)
         self.offset_y.setValue(0)
@@ -589,6 +650,8 @@ class PlotDialog(QDialog):
         self.gap_y.setValue(10)
         self.frame_on.setChecked(False)
         self.fixed_origin.setChecked(False)
+        self.tile_on.setChecked(False)
+        self.marks_on.setChecked(False)
         for i in range(self.color_list.count()):
             self.color_list.item(i).setCheckState(Qt.Checked)
         self._block = False
@@ -599,9 +662,34 @@ class PlotDialog(QDialog):
 
     def _read_sheet_size(self) -> None:
         plotter = self.controller.profile["plotter"]
+        step = float(plotter.get("step_mm", 0.025))
+        size = None
+        try:
+            transport = build_transport(self.controller.profile["transport"])
+            size = query_sheet_size(transport, step)
+        except TransportError:
+            size = None
+        if size is not None:
+            width, height = size
+            plotter["sheet_width_mm"] = width
+            plotter["sheet_height_mm"] = height
+            self.controller.save()
+            information(
+                self,
+                "Blattgröße",
+                i18n.trf("Vom Plotter gelesen: {w} × {h} mm.", w=f"{width:.1f}", h=f"{height:.1f}"),
+            )
+        else:
+            width = float(plotter.get("sheet_width_mm", 610))
+            height = float(plotter.get("sheet_height_mm", 1000))
+            information(
+                self,
+                "Blattgröße",
+                i18n.tr("Keine Antwort auf OH;. Werte aus dem Profil."),
+            )
         self._block = True
-        self.sheet_width.setValue(float(plotter.get("sheet_width_mm", 610)))
-        self.sheet_height.setValue(float(plotter.get("sheet_height_mm", 1000)))
+        self.sheet_width.setValue(width)
+        self.sheet_height.setValue(height)
         self._block = False
         self._refresh(refit=True)
 
@@ -617,6 +705,64 @@ class PlotDialog(QDialog):
 
     # -- Geometrie ---------------------------------------------------------
 
+    def _on_tiles_changed(self, *_args) -> None:
+        self._rebuild_tile_list()
+        self._refresh(refit=False)
+
+    def _rebuild_tile_list(self) -> None:
+        if not hasattr(self, "tile_list"):
+            return
+        skip = set(self._skipped_tiles())
+        work = self._oriented()
+        nat_w, nat_h = self._natural_size()
+        sx = self.size_w.value() / nat_w if nat_w else 1.0
+        sy = self.size_h.value() / nat_h if nat_h else 1.0
+        if abs(sx - 1.0) > 1e-6 or abs(sy - 1.0) > 1e-6:
+            work = g.scale(work, sx, sy)
+        if not self.wysiwyg.isChecked():
+            work = g.align_to_origin(work, corner=self._corner())
+        tiles = g.tile_sheets(
+            work, self.sheet_width.value(), self.sheet_height.value(), self.tile_overlap.value()
+        ) if self.tile_on.isChecked() else []
+        self.tile_list.blockSignals(True)
+        self.tile_list.clear()
+        for ix, iy, _pls in tiles:
+            key = f"{ix},{iy}"
+            item = QListWidgetItem(i18n.trf("Bahn {x} / {y}", x=ix + 1, y=iy + 1))
+            item.setData(Qt.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked if key in skip else Qt.Checked)
+            self.tile_list.addItem(item)
+        self.tile_list.blockSignals(False)
+
+    def _skipped_tiles(self) -> list[str]:
+        if not hasattr(self, "tile_list") or self.tile_list.count() == 0:
+            return list(getattr(self, "_saved_tile_skip", set()))
+        out = []
+        for i in range(self.tile_list.count()):
+            item = self.tile_list.item(i)
+            if item.checkState() != Qt.Checked:
+                out.append(str(item.data(Qt.UserRole)))
+        return out
+
+    def _apply_tiles(self, work: list[g.Polyline]) -> list[g.Polyline]:
+        tiles = g.tile_sheets(
+            work, self.sheet_width.value(), self.sheet_height.value(), self.tile_overlap.value()
+        )
+        skip = set(self._skipped_tiles())
+        chosen = [(ix, iy, pls) for ix, iy, pls in tiles if f"{ix},{iy}" not in skip]
+        if not chosen:
+            chosen = tiles
+        out: list[g.Polyline] = []
+        gap = self.tile_overlap.value()
+        for i, (_ix, _iy, pls) in enumerate(chosen):
+            if i:
+                minx, miny, maxx, maxy = g.bounds_of(out) if out else (0.0, 0.0, 0.0, 0.0)
+                out.extend(g.translate(pls, 0.0, maxy + gap))
+            else:
+                out.extend(pls)
+        return out or work
+
     def _frame_margins(self) -> tuple[float, float]:
         if not self.frame_on.isChecked():
             return (0.0, 0.0)
@@ -629,8 +775,11 @@ class PlotDialog(QDialog):
         sy = self.size_h.value() / nat_h if nat_h else 1.0
         if abs(sx - 1.0) > 1e-6 or abs(sy - 1.0) > 1e-6:
             work = g.scale(work, sx, sy)
-        work = g.align_to_origin(work, corner=self._corner())
+        if not self.wysiwyg.isChecked():
+            work = g.align_to_origin(work, corner=self._corner())
         work = _with_frame(work, *self._frame_margins())
+        if self.tile_on.isChecked():
+            work = self._apply_tiles(work)
         work = _tile_copies(
             work,
             self.copies_x.value(),
@@ -638,6 +787,14 @@ class PlotDialog(QDialog):
             self.gap_x.value(),
             self.gap_y.value(),
         )
+        if self.marks_on.isChecked():
+            work = work + g.registration_marks(
+                work,
+                placement="inner" if self.marks_inner.isChecked() else "outer",
+                size_mm=self.marks_size.value(),
+                round_fill=self.marks_round.isChecked(),
+                extra=self.marks_extra.isChecked(),
+            )
         if not self.fixed_origin.isChecked():
             minx, miny, maxx, maxy = g.bounds_of(work)
             ax, ay = self._anchor
@@ -676,7 +833,19 @@ class PlotDialog(QDialog):
             self.document_path,
             {
                 "rotate_index": self._rotate_index,
-                "mirror": self.mirror.isChecked(),
+                "mirror": self.mirror_h.isChecked(),
+                "mirror_h": self.mirror_h.isChecked(),
+                "mirror_v": self.mirror_v.isChecked(),
+                "wysiwyg": self.wysiwyg.isChecked(),
+                "tile_on": self.tile_on.isChecked(),
+                "tile_overlap": self.tile_overlap.value(),
+                "tile_skip": self._skipped_tiles(),
+                "marks_on": self.marks_on.isChecked(),
+                "marks_inner": self.marks_inner.isChecked(),
+                "marks_size": self.marks_size.value(),
+                "marks_line": self.marks_line.value(),
+                "marks_round": self.marks_round.isChecked(),
+                "marks_extra": self.marks_extra.isChecked(),
                 "distort": self.distort.isChecked(),
                 "fixed_origin": self.fixed_origin.isChecked(),
                 "copies_x": self.copies_x.value(),
@@ -697,6 +866,9 @@ class PlotDialog(QDialog):
         from .plot_out_dialog import PlotOutDialog
 
         self._persist()
+        plotter = self.controller.profile["plotter"]
+        plotter["crv_res"] = self.crv_res.value()
+        self.controller.save()
         try:
             dlg = PlotOutDialog(
                 self.controller,

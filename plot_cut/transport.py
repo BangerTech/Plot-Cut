@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -35,6 +37,30 @@ class Transport(Protocol):
     def test(self) -> tuple[bool, str]: ...
 
     def describe(self) -> str: ...
+
+
+def parse_oh_response(raw: bytes, step_mm: float) -> tuple[float, float] | None:
+    """HP-GL ``OH;``: vier Zahlen xmin,ymin,xmax,ymax in Plotterschritten."""
+    text = raw.decode("ascii", errors="ignore")
+    nums = [int(n) for n in re.findall(r"-?\d+", text)]
+    if len(nums) < 4:
+        return None
+    xmin, ymin, xmax, ymax = nums[-4:]
+    width = abs(xmax - xmin) * step_mm
+    height = abs(ymax - ymin) * step_mm
+    if width < 10 or height < 10:
+        return None
+    return (width, height)
+
+
+def query_sheet_size(transport: Transport, step_mm: float = 0.025) -> tuple[float, float] | None:
+    query = getattr(transport, "query", None)
+    if query is None:
+        return None
+    raw = query(b"OH;")
+    if not raw:
+        return None
+    return parse_oh_response(raw, step_mm)
 
 
 @dataclass
@@ -166,6 +192,18 @@ class TcpTransport:
                 host=self.host, port=self.port, exc=exc,
             )) from exc
 
+    def query(self, command: bytes, timeout: float = 2.0) -> bytes:
+        try:
+            with socket.create_connection((self.host, self.port), timeout=timeout) as sock:
+                sock.settimeout(timeout)
+                sock.sendall(command)
+                return sock.recv(256) or b""
+        except OSError as exc:
+            raise TransportError(i18n.trf(
+                "TCP-Lesen an {host}:{port} fehlgeschlagen: {exc}",
+                host=self.host, port=self.port, exc=exc,
+            )) from exc
+
     def test(self) -> tuple[bool, str]:
         try:
             with socket.create_connection((self.host, self.port), timeout=self.timeout):
@@ -212,6 +250,20 @@ class SerialTransport:
         except Exception as exc:  # pyserial wirft SerialException
             raise TransportError(i18n.trf(
                 "Serielles Senden an {port} fehlgeschlagen: {exc}", port=port, exc=exc
+            )) from exc
+
+    def query(self, command: bytes, timeout: float = 2.0) -> bytes:
+        serial = _import_serial()
+        port = self._resolve_port()
+        try:
+            with serial.Serial(port, self.baud, timeout=timeout) as ser:
+                ser.reset_input_buffer()
+                ser.write(command)
+                ser.flush()
+                return ser.read(256) or b""
+        except Exception as exc:
+            raise TransportError(i18n.trf(
+                "Serielles Lesen an {port} fehlgeschlagen: {exc}", port=port, exc=exc
             )) from exc
 
     def test(self) -> tuple[bool, str]:
@@ -322,6 +374,34 @@ class MimakiUsbTransport:
                     ))
         finally:
             kernel.CloseHandle(handle)
+
+    def query(self, command: bytes, timeout: float = 2.0) -> bytes:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel, handle, path = self._open()
+        chunks: list[bytes] = []
+        try:
+            written = wintypes.DWORD(0)
+            ok = kernel.WriteFile(handle, command, len(command), ctypes.byref(written), None)
+            if not ok:
+                raise TransportError(i18n.trf(
+                    "Mimaki-Abfrage fehlgeschlagen (Windows-Fehler {err}).",
+                    err=ctypes.get_last_error(),
+                ))
+            buf = ctypes.create_string_buffer(256)
+            nread = wintypes.DWORD(0)
+
+            def _read() -> None:
+                if kernel.ReadFile(handle, buf, 256, ctypes.byref(nread), None) and nread.value:
+                    chunks.append(buf.raw[: nread.value])
+
+            worker = threading.Thread(target=_read, daemon=True)
+            worker.start()
+            worker.join(timeout)
+        finally:
+            kernel.CloseHandle(handle)
+        return chunks[0] if chunks else b""
 
     def test(self) -> tuple[bool, str]:
         try:

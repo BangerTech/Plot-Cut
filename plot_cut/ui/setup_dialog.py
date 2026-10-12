@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import i18n
+from .. import mgl
 from .. import settings as settings_mod
 from ..transport import LokiTransport, TransportError, build_transport
 from .popup import information, question, warning
@@ -158,12 +159,27 @@ class SetupDialog(QDialog):
         self.language = ComboBox()
         i18n.bind_items(
             self.language,
-            [("MGL-IIc (Mimaki)", "mgl2"), ("HP-GL (z. B. Vevor)", "hpgl")],
+            [
+                ("MGL-IIc (Mimaki)", "mgl2"),
+                ("HP-GL (z. B. Vevor)", "hpgl"),
+                ("DMPL", "dmpl"),
+            ],
         )
+        self.language.currentIndexChanged.connect(self._on_language_changed)
         form.addRow(i18n.lab("Befehlssprache"), self.language)
         self.sheet_width = QDoubleSpinBox()
         self.sheet_width.setRange(10.0, 5000.0)
         form.addRow(i18n.lab("Folienbreite (mm)"), self.sheet_width)
+        self.sheet_height = QDoubleSpinBox()
+        self.sheet_height.setRange(10.0, 100000.0)
+        form.addRow(i18n.lab("Folienlänge (mm)"), self.sheet_height)
+        self.step_mm = ComboBox()
+        form.addRow(i18n.lab("Auflösung"), self.step_mm)
+        self.crv_res = QDoubleSpinBox()
+        self.crv_res.setRange(0.01, 2.0)
+        self.crv_res.setSingleStep(0.01)
+        self.crv_res.setDecimals(2)
+        form.addRow(i18n.lab("Kurvenauflösung (mm)"), self.crv_res)
         return box
 
     def _build_connection_box(self) -> QGroupBox:
@@ -263,10 +279,10 @@ class SetupDialog(QDialog):
         i18n.bind(box, title="Standard-Schneidbedingung")
         form = QFormLayout(box)
         self.speed = QSpinBox()
-        self.speed.setRange(1, 100)
+        self.speed.setRange(1, 120)
         form.addRow(i18n.lab("Geschwindigkeit (cm/s)"), self.speed)
         self.pressure = QSpinBox()
-        self.pressure.setRange(10, 500)
+        self.pressure.setRange(1, 500)
         form.addRow(i18n.lab("Druck (g)"), self.pressure)
         self.offset = QDoubleSpinBox()
         self.offset.setRange(0.0, 2.0)
@@ -297,8 +313,13 @@ class SetupDialog(QDialog):
         prof = self.work["profiles"][name]
         p, t, d = prof["plotter"], prof["transport"], prof["defaults"]
         self.model.setText(p.get("model", ""))
-        self.language.setCurrentIndex(max(0, self.language.findData(p.get("language", "mgl2"))))
+        lang = p.get("language", "mgl2")
+        self.language.setCurrentIndex(max(0, self.language.findData(lang)))
         self.sheet_width.setValue(float(p.get("sheet_width_mm", 610.0)))
+        self.sheet_height.setValue(float(p.get("sheet_height_mm", 1000.0)))
+        self.crv_res.setValue(float(p.get("crv_res", 0.05)))
+        self._fill_step_combo(lang, float(p.get("step_mm", 0.025)))
+        self._apply_condition_limits(lang)
 
         self.kind.setCurrentIndex(max(0, self.kind.findData(t.get("kind", "file"))))
         self.stack.setCurrentIndex(self.kind.currentIndex())
@@ -328,6 +349,9 @@ class SetupDialog(QDialog):
                 "model": self.model.text().strip(),
                 "language": self.language.currentData(),
                 "sheet_width_mm": self.sheet_width.value(),
+                "sheet_height_mm": self.sheet_height.value(),
+                "step_mm": float(self.step_mm.currentData() or 0.025),
+                "crv_res": self.crv_res.value(),
             }
         )
         prof["transport"] = self._collect_transport()
@@ -338,6 +362,31 @@ class SetupDialog(QDialog):
                 "offset": self.offset.value(),
             }
         )
+
+    def _on_language_changed(self) -> None:
+        lang = str(self.language.currentData() or "mgl2")
+        current = float(self.step_mm.currentData() or 0.025) if self.step_mm.count() else 0.025
+        self._fill_step_combo(lang, current)
+        self._apply_condition_limits(lang)
+
+    def _fill_step_combo(self, language: str, selected: float) -> None:
+        self.step_mm.blockSignals(True)
+        self.step_mm.clear()
+        for value, label in mgl.step_choices(language):
+            self.step_mm.addItem(label, value)
+        idx = 0
+        for i in range(self.step_mm.count()):
+            if abs(float(self.step_mm.itemData(i)) - selected) < 1e-9:
+                idx = i
+                break
+        self.step_mm.setCurrentIndex(idx)
+        self.step_mm.blockSignals(False)
+
+    def _apply_condition_limits(self, language: str) -> None:
+        lo, hi = mgl.speed_range(language)
+        self.speed.setRange(lo, hi)
+        lo, hi = mgl.pressure_range(language)
+        self.pressure.setRange(lo, hi)
 
     def _collect_transport(self) -> dict:
         kind = self.kind.currentData()

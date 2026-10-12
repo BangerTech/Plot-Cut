@@ -508,6 +508,17 @@ def mirror_x(polylines: list[Polyline], axis_x: float | None = None) -> list[Pol
     ]
 
 
+def mirror_y(polylines: list[Polyline], axis_y: float | None = None) -> list[Polyline]:
+    """Vertikal spiegeln um die waagerechte Achse ``axis_y`` (Default: Bbox-Mitte)."""
+    if axis_y is None:
+        _, miny, _, maxy = bounds_of(polylines)
+        axis_y = (miny + maxy) / 2.0
+    return [
+        _carry(pl, [(x, 2 * axis_y - y) for (x, y) in pl.points])
+        for pl in polylines
+    ]
+
+
 def move_to_origin(polylines: list[Polyline], margin: float = 0.0) -> list[Polyline]:
     """Verschiebt so, dass die Bounding-Box bei (margin, margin) beginnt."""
     minx, miny, _, _ = bounds_of(polylines)
@@ -712,6 +723,187 @@ class CutJob:
     @property
     def total_cut_mm(self) -> float:
         return sum(pl.length() for pl in self.polylines)
+
+
+def _clip_segment(
+    x0: float, y0: float, x1: float, y1: float, rect: tuple[float, float, float, float]
+) -> tuple[float, float, float, float] | None:
+    xmin, ymin, xmax, ymax = rect
+    dx, dy = x1 - x0, y1 - y0
+    p = (-dx, dx, -dy, dy)
+    q = (x0 - xmin, xmax - x0, y0 - ymin, ymax - y0)
+    u1, u2 = 0.0, 1.0
+    for pi, qi in zip(p, q, strict=False):
+        if abs(pi) < 1e-12:
+            if qi < 0:
+                return None
+            continue
+        t = qi / pi
+        if pi < 0:
+            u1 = max(u1, t)
+        else:
+            u2 = min(u2, t)
+        if u1 > u2:
+            return None
+    return (x0 + u1 * dx, y0 + u1 * dy, x0 + u2 * dx, y0 + u2 * dy)
+
+
+def clip_to_rect(
+    polylines: list[Polyline], x0: float, y0: float, x1: float, y1: float
+) -> list[Polyline]:
+    """Schneidet Pfade auf das Rechteck. Geschlossene Pfade koennen aufgehen."""
+    rect = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    out: list[Polyline] = []
+    for pl in polylines:
+        current: list[Point] = []
+        pts = pl.points
+        for a, b in zip(pts, pts[1:], strict=False):
+            clipped = _clip_segment(a[0], a[1], b[0], b[1], rect)
+            if clipped is None:
+                if len(current) >= 2:
+                    out.append(_carry(pl, list(current), closed=False))
+                current = []
+                continue
+            cx0, cy0, cx1, cy1 = clipped
+            if not current:
+                current.append((cx0, cy0))
+            elif math.hypot(current[-1][0] - cx0, current[-1][1] - cy0) > 1e-6:
+                if len(current) >= 2:
+                    out.append(_carry(pl, list(current), closed=False))
+                current = [(cx0, cy0)]
+            current.append((cx1, cy1))
+        if len(current) >= 2:
+            closed = bool(pl.closed and current[0] == current[-1])
+            out.append(_carry(pl, list(current), closed=closed))
+    return [pl for pl in out if not pl.is_empty()]
+
+
+def tile_sheets(
+    polylines: list[Polyline],
+    sheet_w: float,
+    sheet_h: float,
+    overlap: float = 0.0,
+) -> list[tuple[int, int, list[Polyline]]]:
+    """Teilt das Motiv in Folienkacheln. Koordinaten je Kachel am Ursprung."""
+    if not polylines:
+        return []
+    minx, miny, maxx, maxy = bounds_of(polylines)
+    usable_w = max(sheet_w - max(overlap, 0.0), 1.0)
+    usable_h = max(sheet_h - max(overlap, 0.0), 1.0)
+    nx = max(1, math.ceil((maxx - minx) / usable_w - 1e-9))
+    ny = max(1, math.ceil((maxy - miny) / usable_h - 1e-9))
+    tiles: list[tuple[int, int, list[Polyline]]] = []
+    for iy in range(ny):
+        for ix in range(nx):
+            x0 = minx + ix * usable_w
+            y0 = miny + iy * usable_h
+            clipped = clip_to_rect(polylines, x0, y0, x0 + sheet_w, y0 + sheet_h)
+            if not clipped:
+                continue
+            tiles.append((ix, iy, translate(clipped, -x0, -y0)))
+    return tiles
+
+
+def circle_arc(pl: Polyline) -> tuple[float, float, bool, list[Point]] | None:
+    """Voller Kreis: Mittelpunkt, Drehsinn und Overcut-Rest hinter dem Schliessen.
+
+    Die Punkte muessen auf einem Kreis liegen und der Umfang dicht genug sein,
+    damit ein Achteck ein Achteck bleibt. Teilboegen liefert diese Funktion nicht.
+    """
+    if not pl.closed or len(pl.points) < 24:
+        return None
+    pts = pl.points
+    start = pts[0]
+    close_at: int | None = None
+    for i in range(8, len(pts)):
+        if math.hypot(pts[i][0] - start[0], pts[i][1] - start[1]) <= 0.05:
+            close_at = i
+            break
+    loop = pts[: close_at + 1] if close_at is not None else pts
+    if len(loop) < 24:
+        return None
+    sample = loop[:-1] if math.hypot(loop[-1][0] - start[0], loop[-1][1] - start[1]) <= 0.05 else loop
+    if len(sample) < 24:
+        return None
+    cx = sum(p[0] for p in sample) / len(sample)
+    cy = sum(p[1] for p in sample) / len(sample)
+    radii = [math.hypot(p[0] - cx, p[1] - cy) for p in sample]
+    radius = sum(radii) / len(radii)
+    if radius < 0.3:
+        return None
+    if max(abs(d - radius) for d in radii) > max(0.08, radius * 0.02):
+        return None
+    length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(loop, loop[1:], strict=False))
+    if length < 0.995 * 2.0 * math.pi * radius:
+        return None
+    area = 0.0
+    ring = sample
+    for i, (x1, y1) in enumerate(ring):
+        x2, y2 = ring[(i + 1) % len(ring)]
+        area += x1 * y2 - x2 * y1
+    tail = list(pts[close_at + 1 :]) if close_at is not None else []
+    while tail and math.hypot(tail[0][0] - start[0], tail[0][1] - start[1]) <= 0.05:
+        tail.pop(0)
+    return cx, cy, area > 0.0, tail
+
+
+def circle_polyline(
+    cx: float, cy: float, radius: float, *, n: int = 36, color: str = "#111111"
+) -> Polyline:
+    pts = [
+        (cx + radius * math.cos(2 * math.pi * i / n), cy + radius * math.sin(2 * math.pi * i / n))
+        for i in range(n + 1)
+    ]
+    return Polyline(pts, closed=True, color=color, kind="path")
+
+
+def _square_mark(cx: float, cy: float, size: float, color: str) -> Polyline:
+    h = size / 2.0
+    pts = [
+        (cx - h, cy - h),
+        (cx + h, cy - h),
+        (cx + h, cy + h),
+        (cx - h, cy + h),
+        (cx - h, cy - h),
+    ]
+    return Polyline(pts, closed=True, color=color, kind="path")
+
+
+def registration_marks(
+    polylines: list[Polyline],
+    *,
+    placement: str = "outer",
+    size_mm: float = 10.0,
+    round_fill: bool = False,
+    extra: bool = False,
+    color: str = "#be1b22",
+) -> list[Polyline]:
+    """Passermarken an den Ecken der Bounding-Box, aussen oder innen."""
+    if not polylines:
+        return []
+    minx, miny, maxx, maxy = bounds_of(polylines)
+    size = max(size_mm, 1.0)
+    inset = size / 2.0
+    if placement == "inner":
+        xs = (minx + inset, maxx - inset)
+        ys = (miny + inset, maxy - inset)
+    else:
+        xs = (minx - inset, maxx + inset)
+        ys = (miny - inset, maxy + inset)
+    corners = [(xs[0], ys[0]), (xs[1], ys[0]), (xs[0], ys[1]), (xs[1], ys[1])]
+    marks = [
+        circle_polyline(x, y, size / 2.0, color=color) if round_fill else _square_mark(x, y, size, color)
+        for x, y in corners
+    ]
+    if extra:
+        mx = (xs[0] + xs[1]) / 2.0
+        my = ys[1]
+        marks.append(
+            circle_polyline(mx, my, size / 2.0, color=color)
+            if round_fill
+            else _square_mark(mx, my, size, color)
+        )
+    return marks
 
 
 def prepare_job(

@@ -28,7 +28,7 @@ from .. import geometry as g
 from .. import i18n
 from .. import mgl
 from ..transport import TransportError, build_transport
-from .popup import critical, information
+from .popup import critical, information, question
 from .preview import PreviewWidget, view_buttons
 from .style import FINECUT_STYLE, ComboBox
 
@@ -43,7 +43,6 @@ QPushButton#Side { min-width: 170px; }
 
 SAME_AS_ABOVE = "__same__"
 DO_NOT_CUT = "__skip__"
-TOOLS = [("CT1", 1), ("CT2", 2), ("CT3", 3)]
 
 
 class PlotOutDialog(QDialog):
@@ -151,18 +150,21 @@ class PlotOutDialog(QDialog):
         self.tool_label = i18n.lab("Werkzeug")
         grid.addWidget(self.tool_label, 3, 1)
         self.tool = ComboBox()
-        for label, value in TOOLS:
+        for label, value in mgl.TOOLS:
             self.tool.addItem(label, value)
         self.tool.setCurrentIndex(max(0, self.tool.findData(int(d.get("tool", 1)))))
         grid.addWidget(self.tool, 3, 2)
 
+        lang = str(self.controller.profile["plotter"].get("language", "mgl2"))
         self.use_speed = QCheckBox(i18n.tr("Geschwindigkeit"))
         self.speed = QSpinBox()
-        self.speed.setRange(1, 100)
+        lo, hi = mgl.speed_range(lang)
+        self.speed.setRange(lo, hi)
         self.speed.setValue(int(d.get("speed", 30)))
         self.use_pressure = QCheckBox(i18n.tr("Andruck"))
         self.pressure = QSpinBox()
-        self.pressure.setRange(10, 500)
+        lo, hi = mgl.pressure_range(lang)
+        self.pressure.setRange(lo, hi)
         self.pressure.setValue(int(d.get("pressure", 100)))
         self.use_offset = QCheckBox(i18n.tr("Offset"))
         self.offset = QDoubleSpinBox()
@@ -256,6 +258,43 @@ class PlotOutDialog(QDialog):
         overcut_row.addWidget(self.overcut)
         overcut_row.addStretch(1)
         grid.addLayout(overcut_row, 0, 1)
+
+        self.extra_passes = QSpinBox()
+        self.extra_passes.setRange(0, 9)
+        self.extra_passes.setValue(int(d.get("extra_passes", 0)))
+        self.extra_passes.setToolTip(i18n.tr("Zusätzliche Schnitte über denselben Pfad"))
+        extra_row = QHBoxLayout()
+        extra_row.addWidget(i18n.lab("Mehrfachschnitt"))
+        extra_row.addWidget(self.extra_passes)
+        extra_row.addStretch(1)
+        grid.addLayout(extra_row, 1, 1)
+
+        self.pause_color = QCheckBox(i18n.tr("Nach jeder Farbe anhalten"))
+        self.pause_color.setChecked(bool(d.get("pause_per_color", False)))
+        grid.addWidget(self.pause_color, 2, 1)
+
+        self.end_origin = QRadioButton(i18n.tr("Zum Ursprung"))
+        self.end_feed = QRadioButton(i18n.tr("Folie vorschieben"))
+        self.end_stay = QRadioButton(i18n.tr("Stehen bleiben"))
+        self.end_group = QButtonGroup(self)
+        for i, rb in enumerate((self.end_origin, self.end_feed, self.end_stay)):
+            self.end_group.addButton(rb, i)
+        action = d.get("end_action", "stay")
+        {"origin": self.end_origin, "feed": self.end_feed}.get(action, self.end_stay).setChecked(True)
+        grid.addWidget(i18n.lab("Nach dem Schnitt"), 3, 1)
+        grid.addWidget(self.end_origin, 4, 1)
+        self.feed_mm = QDoubleSpinBox()
+        self.feed_mm.setRange(0.0, 5000.0)
+        self.feed_mm.setSuffix(" mm")
+        self.feed_mm.setValue(float(d.get("feed_mm", 20.0)))
+        feed_row = QHBoxLayout()
+        feed_row.addWidget(self.end_feed)
+        feed_row.addWidget(self.feed_mm)
+        feed_row.addStretch(1)
+        grid.addLayout(feed_row, 5, 1)
+        grid.addWidget(self.end_stay, 6, 1)
+        self.end_feed.toggled.connect(lambda on: self.feed_mm.setEnabled(on))
+        self.feed_mm.setEnabled(self.end_feed.isChecked())
         grid.setColumnStretch(1, 1)
         return box
 
@@ -400,24 +439,43 @@ class PlotOutDialog(QDialog):
             cm=f"{job.total_cut_mm / 10.0:.1f}",
         ))
 
-    def _generate_bytes(self) -> bytes:
-        job = self._build_job()
+    def _end_action(self) -> str:
+        if self.end_origin.isChecked():
+            return "origin"
+        if self.end_feed.isChecked():
+            return "feed"
+        return "stay"
+
+    def _plot_options(self, job: g.CutJob) -> mgl.PlotOptions:
         plotter = self.controller.profile["plotter"]
         park = None
         if self.park.isChecked() and job.polylines:
             _minx, _miny, _maxx, maxy = g.bounds_of(job.polylines)
             park = (0.0, maxy + self.park_gap.value())
-        return mgl.generate_bytes(
+        return mgl.PlotOptions(
+            language=str(plotter.get("language", "mgl2")),
+            emit_conditions=self._condition_source() != "plotter",
+            group_by_color=self.sort_color.isChecked() or not self.sort.isChecked(),
+            park_mm=park,
+            step_mm=float(plotter.get("step_mm", 0.025)),
+            end_action=self._end_action(),
+            feed_mm=self.feed_mm.value(),
+            extra_passes=self.extra_passes.value(),
+        )
+
+    def _generate_bytes(self) -> bytes:
+        chunks = self._generate_chunks(split_colors=False)
+        return chunks[0] if chunks else b""
+
+    def _generate_chunks(self, split_colors: bool) -> list[bytes]:
+        job = self._build_job()
+        return mgl.generate_chunk_bytes(
             job,
             conditions_by_color=self.controller.conditions_by_color(),
             default_condition=self._main_condition(),
-            options=mgl.PlotOptions(
-                language=plotter.get("language", "mgl2"),
-                emit_conditions=self._condition_source() != "plotter",
-                group_by_color=self.sort_color.isChecked() or not self.sort.isChecked(),
-                park_mm=park,
-            ),
+            options=self._plot_options(job),
             copies=self.copies,
+            split_colors=split_colors,
         )
 
     # -- Knoepfe -----------------------------------------------------------
@@ -450,15 +508,26 @@ class PlotOutDialog(QDialog):
 
     def _on_plot(self) -> None:
         self._persist_defaults()
-        data = self._generate_bytes()
+        split = self.pause_color.isChecked()
+        chunks = self._generate_chunks(split_colors=split)
         transport = build_transport(self.controller.profile["transport"])
-        try:
-            transport.send(data)
-        except TransportError as exc:
-            critical(self, "Senden fehlgeschlagen", str(exc))
-            return
+        sent = 0
+        for i, data in enumerate(chunks):
+            if i > 0:
+                if not question(
+                    self,
+                    "Nächste Farbe",
+                    "Die nächste Farbe ist bereit. Folie wechseln oder Blatt prüfen, dann Ja zum Weiterschneiden.",
+                ):
+                    break
+            try:
+                transport.send(data)
+            except TransportError as exc:
+                critical(self, "Senden fehlgeschlagen", str(exc))
+                return
+            sent += len(data)
         information(self, "Schneiden", i18n.trf(
-            "Gesendet an {where} ({n} Bytes).", where=transport.describe(), n=len(data)
+            "Gesendet an {where} ({n} Bytes).", where=transport.describe(), n=sent
         ))
         self.accept()
 
@@ -500,6 +569,10 @@ class PlotOutDialog(QDialog):
                 "park": self.park.isChecked(),
                 "park_mm": self.park_gap.value(),
                 "send_conditions": source != "plotter",
+                "end_action": self._end_action(),
+                "feed_mm": self.feed_mm.value(),
+                "extra_passes": self.extra_passes.value(),
+                "pause_per_color": self.pause_color.isChecked(),
             }
         )
         self.controller.save()
